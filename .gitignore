@@ -1,4 +1,5 @@
 *.js
+*.js.map
 !deployment/.typescript/cdk-solution-helper/index.js
 !**/create-govcloud-account/index.js
 package-lock.json
@@ -48,6 +49,7 @@ coverage/
 
 ### Exclude Documentation ###
 docs
+!source/mkdocs/docs
 
 ### Exclude Jest test report directory
 test-reports
@@ -62,3 +64,13 @@ development
 
 ### Viperlight
 viperlight*.zip
+/.idea/
+
+### Sonarqube
+.scannerwork
+
+*.js.map
+
+### Integ testing
+**/integ.*.ts.snapshot
+**/integ.*.ts.snapshot/**

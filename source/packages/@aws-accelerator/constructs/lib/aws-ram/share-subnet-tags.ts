@@ -30,13 +30,17 @@ export interface ShareSubnetTagsProps {
    */
   readonly subnetName: string;
   /**
-   * Custom resource lambda log group encryption key
+   * Custom resource lambda log group encryption key, when undefined default AWS managed key will be used
    */
-  readonly resourceLoggingKmsKey: cdk.aws_kms.IKey;
+  readonly resourceLoggingKmsKey?: cdk.aws_kms.IKey;
   /**
    * Custom resource lambda log retention in days
    */
   readonly logRetentionInDays: number;
+  /**
+   * Accelerator SSM parameter Prefix
+   */
+  readonly acceleratorSsmParamPrefix: string;
 }
 
 /**
@@ -55,16 +59,14 @@ export class ShareSubnetTags extends Construct {
     //
     const provider = cdk.CustomResourceProvider.getOrCreateProvider(this, SHARE_SUBNET_TAGS_TYPE, {
       codeDirectory: path.join(__dirname, 'share-subnet-tags/dist'),
-      runtime: cdk.CustomResourceProviderRuntime.NODEJS_14_X,
+      runtime: cdk.CustomResourceProviderRuntime.NODEJS_16_X,
       policyStatements: [
         {
           Effect: 'Allow',
           Action: ['ec2:DeleteTags', 'ec2:CreateTags'],
           Resource: [
-            `arn:${cdk.Aws.PARTITION}:ec2:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:subnet/*`,
-            `arn:${cdk.Aws.PARTITION}:ec2:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:vpc/*`,
-            `arn:${cdk.Aws.PARTITION}:ec2:${cdk.Aws.REGION}:${props.owningAccountId}:subnet/*`,
-            `arn:${cdk.Aws.PARTITION}:ec2:${cdk.Aws.REGION}:${props.owningAccountId}:vpc/*`,
+            `arn:${cdk.Aws.PARTITION}:ec2:${cdk.Aws.REGION}:*:subnet/*`,
+            `arn:${cdk.Aws.PARTITION}:ec2:${cdk.Aws.REGION}:*:vpc/*`,
           ],
         },
         {
@@ -87,6 +89,7 @@ export class ShareSubnetTags extends Construct {
         sharedSubnetId: props.sharedSubnetId,
         sharedSubnetName: props.subnetName,
         vpcName: props.vpcName,
+        acceleratorSsmParamPrefix: props.acceleratorSsmParamPrefix,
       },
       resourceType: SHARE_SUBNET_TAGS_TYPE,
       serviceToken: provider.serviceToken,

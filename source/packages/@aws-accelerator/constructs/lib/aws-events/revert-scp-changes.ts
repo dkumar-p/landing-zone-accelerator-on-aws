@@ -21,27 +21,15 @@ import * as path from 'path';
 /**
  * Organizations Revert Scp Changes
  * This construct creates a Lambda function and eventbridge rule to trigger on
- * service control policy (scp) changes as well as attach and detatch actions. Upon
+ * service control policy (scp) changes as well as attach and detach actions. Upon
  * receiving an event, the Lambda function will evaluate the change and revert to the
  * state defined by the organization-config file.
  */
 export interface RevertScpChangesProps {
   /**
-   * Audit account Id
+   * Prefix for accelerator resources
    */
-  readonly auditAccountId: string;
-  /**
-   * Log Archive account Id
-   */
-  readonly logArchiveAccountId: string;
-  /**
-   * Management account Id
-   */
-  readonly managementAccountId: string;
-  /**
-   * Management account access role
-   */
-  readonly managementAccountAccessRole: string;
+  readonly acceleratorPrefix: string;
   /**
    * Configuration directory path
    */
@@ -51,32 +39,44 @@ export interface RevertScpChangesProps {
    */
   readonly homeRegion: string;
   /**
-   * Lambda log group encryption key
+   * Lambda log group encryption key, when undefined default AWS managed key will be used
    */
-  readonly kmsKeyCloudWatch: cdk.aws_kms.Key;
+  readonly kmsKeyCloudWatch?: cdk.aws_kms.IKey;
   /**
-   * Lambda environment variable encryption key
+   * Lambda environment variable encryption key, when undefined default AWS managed key will be used
    */
-  readonly kmsKeyLambda: cdk.aws_kms.Key;
+  readonly kmsKeyLambda?: cdk.aws_kms.IKey;
   /**
    * Lambda log retention in days
    */
   readonly logRetentionInDays: number;
   /**
-   * SNS Topic Name to publish notifiactions to
+   * Accelerator SNS topic name Prefix
+   */
+  readonly acceleratorTopicNamePrefix: string;
+  /**
+   * SNS Topic Name to publish notifications to
    */
   readonly snsTopicName: string | undefined;
   /**
    * SCP File Paths
    */
-  readonly scpFilePaths: string[];
+  readonly scpFilePaths: { name: string; path: string; tempPath: string }[];
+  /**
+   * Single Account mode
+   */
+  readonly singleAccountMode: boolean;
+  /**
+   * Organization enabled
+   */
+  readonly organizationEnabled: boolean;
 }
 
 export class RevertScpChanges extends Construct {
   constructor(scope: Construct, id: string, props: RevertScpChangesProps) {
     super(scope, id);
 
-    this.copyPoliciesToDeploymentPackage(props.scpFilePaths, props.configDirPath);
+    this.copyPoliciesToDeploymentPackage(props.scpFilePaths);
     this.copyConfigsToDeploymentPackage(['accounts-config.yaml', 'organization-config.yaml'], props.configDirPath);
 
     const LAMBDA_TIMEOUT_IN_MINUTES = 1;
@@ -107,9 +107,9 @@ export class RevertScpChanges extends Construct {
     const revertScpChangesPolicyList = [kmsEncryptMessage, orgPolicyUpdate];
 
     if (props.snsTopicName) {
-      snsTopicArn = `arn:${cdk.Stack.of(this).partition}:sns:${props.homeRegion}:${
-        cdk.Stack.of(this).account
-      }:aws-accelerator-${props.snsTopicName}`;
+      snsTopicArn = `arn:${cdk.Stack.of(this).partition}:sns:${props.homeRegion}:${cdk.Stack.of(this).account}:${
+        props.acceleratorTopicNamePrefix
+      }-${props.snsTopicName}`;
       revertScpChangesPolicyList.push(
         new cdk.aws_iam.PolicyStatement({
           sid: 'snsPublishMessage',
@@ -122,18 +122,17 @@ export class RevertScpChanges extends Construct {
 
     const revertScpChangesFunction = new cdk.aws_lambda.Function(this, 'RevertScpChangesFunction', {
       code: cdk.aws_lambda.Code.fromAsset(path.join(__dirname, 'revert-scp-changes/dist')),
-      runtime: cdk.aws_lambda.Runtime.NODEJS_14_X,
+      runtime: cdk.aws_lambda.Runtime.NODEJS_16_X,
       handler: 'index.handler',
       description: 'Lambda function to revert changes made to LZA-controlled service control policies',
       timeout: cdk.Duration.minutes(LAMBDA_TIMEOUT_IN_MINUTES),
       environment: {
+        ACCELERATOR_PREFIX: props.acceleratorPrefix,
         AWS_PARTITION: cdk.Aws.PARTITION,
         HOME_REGION: props.homeRegion,
         SNS_TOPIC_ARN: snsTopicArn ?? '',
-        MANAGEMENT_ACCOUNT_ID: props.managementAccountId,
-        LOG_ARCHIVE_ACCOUNT_ID: props.logArchiveAccountId,
-        AUDIT_ACCOUNT_ID: props.auditAccountId,
-        MANAGEMENT_ACCOUNT_ACCESS_ROLE: props.managementAccountAccessRole,
+        SINGLE_ACCOUNT_MODE: `${props.singleAccountMode}`,
+        ORGANIZATIONS_ENABLED: `${props.organizationEnabled}`,
       },
       environmentEncryption: props.kmsKeyLambda,
       initialPolicy: revertScpChangesPolicyList,
@@ -168,7 +167,7 @@ export class RevertScpChanges extends Construct {
           eventName: ['AttachPolicy', 'DetachPolicy', 'UpdatePolicy'],
         },
       },
-      description: 'Rule to notify when an LZA-managed SCP is modified or detatched.',
+      description: 'Rule to notify when an LZA-managed SCP is modified or detached.',
     });
 
     modifyScpRule.addTarget(
@@ -187,7 +186,7 @@ export class RevertScpChanges extends Construct {
   }
 
   // Copies Service Control Policy files to the Lambda directory for packaging
-  private copyPoliciesToDeploymentPackage(filePaths: string[], configDirPath: string) {
+  private copyPoliciesToDeploymentPackage(filePaths: { name: string; path: string; tempPath: string }[]) {
     const deploymentPackagePath = path.join(__dirname, 'revert-scp-changes/dist');
 
     // Make policy folder
@@ -195,10 +194,13 @@ export class RevertScpChanges extends Construct {
 
     for (const policyFilePath of filePaths) {
       // Create subdirectories if they don't exist
-      fs.mkdirSync(path.dirname(path.join(deploymentPackagePath, 'policies', policyFilePath)), { recursive: true });
+      fs.mkdirSync(path.dirname(path.join(deploymentPackagePath, 'policies', policyFilePath.path)), {
+        recursive: true,
+      });
+      //copy from generated temp path to original policy path
       fs.copyFileSync(
-        path.join(configDirPath, policyFilePath),
-        path.join(deploymentPackagePath, 'policies', policyFilePath),
+        path.join(policyFilePath.tempPath),
+        path.join(deploymentPackagePath, 'policies', policyFilePath.path),
       );
     }
   }

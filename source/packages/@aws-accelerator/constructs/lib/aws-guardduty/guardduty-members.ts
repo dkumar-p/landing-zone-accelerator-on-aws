@@ -29,9 +29,9 @@ export interface GuardDutyMembersProps {
    */
   readonly enableEksProtection: boolean;
   /**
-   * Custom resource lambda log group encryption key
+   * Custom resource lambda log group encryption key, when undefined default AWS managed key will be used
    */
-  readonly kmsKey: cdk.aws_kms.IKey;
+  readonly kmsKey?: cdk.aws_kms.IKey;
   /**
    * Custom resource lambda log retention in days
    */
@@ -50,9 +50,11 @@ export class GuardDutyMembers extends Construct {
 
     const RESOURCE_TYPE = 'Custom::GuardDutyCreateMembers';
 
+    const servicePrincipal = 'guardduty.amazonaws.com';
+
     const provider = cdk.CustomResourceProvider.getOrCreateProvider(this, RESOURCE_TYPE, {
       codeDirectory: path.join(__dirname, 'create-members/dist'),
-      runtime: cdk.CustomResourceProviderRuntime.NODEJS_14_X,
+      runtime: cdk.CustomResourceProviderRuntime.NODEJS_16_X,
       policyStatements: [
         {
           Sid: 'GuardDutyCreateMembersTaskOrganizationAction',
@@ -61,7 +63,7 @@ export class GuardDutyMembers extends Construct {
           Resource: '*',
           Condition: {
             StringLikeIfExists: {
-              'organizations:ListAccounts': ['guardduty.amazonaws.com'],
+              'organizations:ListAccounts': [servicePrincipal],
             },
           },
         },
@@ -84,7 +86,7 @@ export class GuardDutyMembers extends Construct {
           Sid: 'ServiceLinkedRoleSecurityHub',
           Effect: 'Allow',
           Action: ['iam:CreateServiceLinkedRole'],
-          Resource: ['*'],
+          Resource: '*',
         },
       ],
     });

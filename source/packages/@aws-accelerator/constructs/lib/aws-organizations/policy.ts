@@ -1,5 +1,5 @@
 /**
- *  Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ *  Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License"). You may not use this file except in compliance
  *  with the License. A copy of the License is located at
@@ -15,7 +15,12 @@ import * as cdk from 'aws-cdk-lib';
 import * as assets from 'aws-cdk-lib/aws-s3-assets';
 import { Construct } from 'constructs';
 import * as path from 'path';
+import { createHash } from 'crypto';
+import { readFileSync } from 'fs';
 import { v4 as uuidv4 } from 'uuid';
+import { createLogger } from '@aws-accelerator/utils/lib/logger';
+
+const logger = createLogger(['constructs-organization-policy']);
 
 export enum PolicyType {
   AISERVICES_OPT_OUT_POLICY = 'AISERVICES_OPT_OUT_POLICY',
@@ -42,9 +47,9 @@ export interface Tag {
  */
 export interface PolicyProps {
   /**
-   * Custom resource lambda log group encryption key
+   * Custom resource lambda log group encryption key, when undefined default AWS managed key will be used
    */
-  readonly kmsKey: cdk.aws_kms.Key;
+  readonly kmsKey?: cdk.aws_kms.IKey;
   /**
    * Custom resource lambda log retention in days
    */
@@ -66,6 +71,14 @@ export interface PolicyProps {
    */
   readonly type: PolicyType;
   /**
+   * The SCP strategy - "allow-list" or "deny-list"The type of policy to create
+   */
+  readonly strategy?: string;
+  /**
+   * Accelerator prefix
+   */
+  readonly acceleratorPrefix: string;
+  /**
    * An optional description of the policy
    */
   readonly description?: string;
@@ -84,6 +97,7 @@ export class Policy extends Construct {
   public readonly name: string;
   public readonly description?: string;
   public readonly type: PolicyType;
+  public readonly strategy?: string;
   public readonly tags?: Tag[];
 
   constructor(scope: Construct, id: string, props: PolicyProps) {
@@ -93,6 +107,7 @@ export class Policy extends Construct {
     this.name = props.name;
     this.description = props.description || '';
     this.type = props.type;
+    this.strategy = props.strategy;
     this.tags = props.tags || [];
 
     //
@@ -102,17 +117,41 @@ export class Policy extends Construct {
       path: props.path,
     });
 
+    let uuid: string;
+    // generating md5 hash to allow for file changes and only trigger change when file is updated
+    const fileHash = createHash('md5').update(readFileSync(props.path)).digest('hex');
+
+    // Boolean to force update
+    const forceUpdate = process.env['ACCELERATOR_FORCED_UPDATE']
+      ? process.env['ACCELERATOR_FORCED_UPDATE'] === 'true'
+      : false;
+
+    if (forceUpdate) {
+      logger.warn(`ACCELERATOR_FORCED_UPDATE env variable is set. Forcing an update.`);
+      uuid = uuidv4();
+    } else {
+      uuid = fileHash;
+    }
+
     //
     // Function definition for the custom resource
     //
     const provider = cdk.CustomResourceProvider.getOrCreateProvider(this, 'Custom::OrganizationsCreatePolicy', {
       codeDirectory: path.join(__dirname, 'create-policy/dist'),
-      runtime: cdk.CustomResourceProviderRuntime.NODEJS_14_X,
+      runtime: cdk.CustomResourceProviderRuntime.NODEJS_18_X,
       description: 'Organizations create policy',
       policyStatements: [
         {
           Effect: 'Allow',
-          Action: ['organizations:CreatePolicy', 'organizations:ListPolicies', 'organizations:UpdatePolicy'],
+          Action: [
+            'organizations:CreatePolicy',
+            'organizations:DeletePolicy',
+            'organizations:DetachPolicy',
+            'organizations:ListPolicies',
+            'organizations:ListTargetsForPolicy',
+            'organizations:UpdatePolicy',
+            'organizations:TagResource',
+          ],
           Resource: '*',
         },
         {
@@ -142,10 +181,12 @@ export class Policy extends Construct {
         bucket: asset.s3BucketName,
         key: asset.s3ObjectKey,
         partition: props.partition,
-        uuid: uuidv4(),
+        policyTagKey: `${props.acceleratorPrefix}Managed`,
+        uuid,
         name: props.name,
         description: props.description,
         type: props.type,
+        strategy: props.strategy,
         tags: props.tags,
       },
     });

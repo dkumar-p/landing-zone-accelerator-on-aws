@@ -17,9 +17,13 @@ import * as path from 'path';
 
 interface CrossAccountRouteFrameworkProps {
   /**
-   * Custom resource lambda log group encryption key
+   * Accelerator Prefix
    */
-  readonly logGroupKmsKey: cdk.aws_kms.Key;
+  readonly acceleratorPrefix: string;
+  /**
+   * Custom resource lambda log group encryption key, when undefined default AWS managed key will be used
+   */
+  readonly logGroupKmsKey?: cdk.aws_kms.IKey;
 
   /**
    * Custom resource lambda log retention in days
@@ -37,7 +41,7 @@ export class CrossAccountRouteFramework extends cdk.Resource {
       sid: 'StsAssumeRole',
       effect: cdk.aws_iam.Effect.ALLOW,
       actions: ['sts:AssumeRole'],
-      resources: [`arn:${cdk.Stack.of(this).partition}:iam::*:role/AWSAccelerator*`],
+      resources: [`arn:${cdk.Stack.of(this).partition}:iam::*:role/${props.acceleratorPrefix}*`],
     });
 
     const onEventRoutePolicy = new cdk.aws_iam.PolicyStatement({
@@ -49,7 +53,7 @@ export class CrossAccountRouteFramework extends cdk.Resource {
 
     const onEvent = new cdk.aws_lambda.Function(this, 'CrossAccountRouteFunction', {
       code: cdk.aws_lambda.Code.fromAsset(path.join(__dirname, 'cross-account-route/dist')),
-      runtime: cdk.aws_lambda.Runtime.NODEJS_14_X,
+      runtime: cdk.aws_lambda.Runtime.NODEJS_16_X,
       handler: 'index.handler',
       timeout: cdk.Duration.seconds(15),
       description: 'Cross account EC2 route OnEvent handler',

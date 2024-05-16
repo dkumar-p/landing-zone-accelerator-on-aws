@@ -43,13 +43,21 @@ export interface KeyLookupProps {
    * Custom resource lambda log retention in days
    */
   readonly logRetentionInDays?: number;
+  /**
+   * Accelerator Prefix
+   */
+  readonly acceleratorPrefix: string;
+  /**
+   * KMS Key ARN
+   */
+  readonly kmsKeyArn?: string;
 }
 
 /**
  * Aws Key class
  */
 export class KeyLookup extends Construct {
-  public readonly key: cdk.aws_kms.Key;
+  public readonly key: cdk.aws_kms.IKey;
 
   constructor(scope: Construct, id: string, props: KeyLookupProps) {
     super(scope, id);
@@ -67,14 +75,16 @@ export class KeyLookup extends Construct {
         roleName: props.roleName,
         kmsKey: props.kmsKey,
         logRetentionInDays: props.logRetentionInDays,
+        acceleratorPrefix: props.acceleratorPrefix,
+        resolvedValue: props.kmsKeyArn,
       }).value;
     }
 
     // Accelerator Key
-    this.key = cdk.aws_kms.Key.fromKeyArn(this, 'Resource', keyArn) as cdk.aws_kms.Key;
+    this.key = cdk.aws_kms.Key.fromKeyArn(this, 'Resource', keyArn);
   }
 
-  public getKey(): cdk.aws_kms.Key {
+  public getKey(): cdk.aws_kms.IKey {
     return this.key;
   }
 }

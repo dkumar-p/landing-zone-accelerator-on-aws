@@ -25,9 +25,9 @@ export interface EbsVolumeEncryptionProps {
    */
   readonly ebsEncryptionKmsKey: cdk.aws_kms.IKey;
   /**
-   * Custom resource lambda log group encryption key
+   * Custom resource lambda log group encryption key, when undefined default AWS managed key will be used
    */
-  readonly logGroupKmsKey: cdk.aws_kms.Key;
+  readonly logGroupKmsKey?: cdk.aws_kms.IKey;
   /**
    * Custom resource lambda log retention in days
    */
@@ -67,7 +67,7 @@ export class EbsDefaultEncryption extends Construct {
 
     const provider = cdk.CustomResourceProvider.getOrCreateProvider(this, EBS_ENCRYPTION_TYPE, {
       codeDirectory: path.join(__dirname, 'ebs-default-encryption/dist'),
-      runtime: cdk.CustomResourceProviderRuntime.NODEJS_14_X,
+      runtime: cdk.CustomResourceProviderRuntime.NODEJS_16_X,
       policyStatements: iamPolicy,
     });
 
@@ -75,7 +75,7 @@ export class EbsDefaultEncryption extends Construct {
       resourceType: EBS_ENCRYPTION_TYPE,
       serviceToken: provider.serviceToken,
       properties: {
-        kmsKeyId: props.ebsEncryptionKmsKey?.keyId,
+        kmsKeyId: props.ebsEncryptionKmsKey.keyId,
       },
     });
 

@@ -35,13 +35,13 @@ export interface MoveAccountsProps {
    */
   readonly managementAccountId: string;
   /**
-   * Custom resource lambda key to encrypt environment variables
+   * Custom resource lambda key to encrypt environment variables, when undefined default AWS managed key will be used
    */
-  readonly lambdaKmsKey: cdk.aws_kms.IKey;
+  readonly lambdaKmsKey?: cdk.aws_kms.IKey;
   /**
-   * Custom resource lambda log group encryption key
+   * Custom resource lambda log group encryption key, when undefined default AWS managed key will be used
    */
-  readonly cloudWatchLogsKmsKey: cdk.aws_kms.IKey;
+  readonly cloudWatchLogsKmsKey?: cdk.aws_kms.IKey;
   /**
    * Custom resource lambda log retention in days
    */
@@ -68,7 +68,7 @@ export class MoveAccounts extends Construct {
 
     const providerLambda = new cdk.aws_lambda.Function(this, 'MoveAccountsFunction', {
       code: cdk.aws_lambda.Code.fromAsset(path.join(__dirname, 'move-account/dist')),
-      runtime: cdk.aws_lambda.Runtime.NODEJS_14_X,
+      runtime: cdk.aws_lambda.Runtime.NODEJS_16_X,
       handler: 'index.handler',
       timeout: cdk.Duration.seconds(150),
       description: 'Moves accounts to conform account config',

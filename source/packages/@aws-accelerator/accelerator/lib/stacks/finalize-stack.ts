@@ -13,41 +13,45 @@
 
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
-import { AcceleratorStack, AcceleratorStackProps } from './accelerator-stack';
-import { Logger } from '../logger';
+import { AcceleratorStack, AcceleratorStackProps, AcceleratorKeyType } from './accelerator-stack';
 import { DetachQuarantineScp } from '../detach-quarantine-scp';
+import { ScpResource } from '../resources/scp-resource';
 
 export class FinalizeStack extends AcceleratorStack {
   constructor(scope: Construct, id: string, props: AcceleratorStackProps) {
     super(scope, id, props);
 
-    Logger.debug(`[finalize-stack] Region: ${cdk.Stack.of(this).region}`);
-
     if (props.globalRegion === cdk.Stack.of(this).region) {
-      Logger.debug(`[finalize-stack] Retrieving CloudWatch kms key`);
-      const cloudwatchKey = cdk.aws_kms.Key.fromKeyArn(
-        this,
-        'AcceleratorGetCloudWatchKey',
-        cdk.aws_ssm.StringParameter.valueForStringParameter(
-          this,
-          AcceleratorStack.ACCELERATOR_CLOUDWATCH_LOG_KEY_ARN_PARAMETER_NAME,
-        ),
-      ) as cdk.aws_kms.Key;
+      this.logger.debug(`Retrieving CloudWatch kms key`);
+
+      const lambdaKey = this.getAcceleratorKey(AcceleratorKeyType.LAMBDA_KEY);
+      const cloudwatchKey = this.getAcceleratorKey(AcceleratorKeyType.CLOUDWATCH_KEY);
+      const scpResource = new ScpResource(this, cloudwatchKey, lambdaKey, props);
+
+      //
+      // Update SCP with dynamic parameters
+      //
+      scpResource.createAndAttachScps(props);
+
+      //
+      // Configure revert scp changes rule
+      //
+      scpResource.configureRevertScpChanges(props);
 
       if (process.env['CONFIG_COMMIT_ID']) {
-        Logger.debug(`[finalize-stack] Storing configuration commit id in SSM`);
+        this.logger.debug(`Storing configuration commit id in SSM`);
         new cdk.aws_ssm.StringParameter(this, 'AcceleratorCommitIdParameter', {
-          parameterName: '/accelerator/configuration/configCommitId',
+          parameterName: `${props.prefixes.ssmParamName}/configuration/configCommitId`,
           stringValue: process.env['CONFIG_COMMIT_ID'],
-          description: `The commit hash of the latest ${AcceleratorStack.ACCELERATOR_CONFIGURATION_REPOSITORY_NAME} commit to deploy successfully`,
+          description: `The commit hash of the latest ${props.configRepositoryName} commit to deploy successfully`,
         });
       }
 
-      if (props.organizationConfig.quarantineNewAccounts?.enable && props.partition == 'aws') {
-        Logger.debug(`[finalize-stack] Creating resources to detach quarantine scp`);
+      if (props.organizationConfig.quarantineNewAccounts?.enable && props.partition === 'aws') {
+        this.logger.debug(`Creating resources to detach quarantine scp`);
         const policyId = cdk.aws_ssm.StringParameter.valueForStringParameter(
           this,
-          `/accelerator/organizations/scp/${props.organizationConfig.quarantineNewAccounts?.scpPolicyName}/id`,
+          `${props.prefixes.ssmParamName}/organizations/scp/${props.organizationConfig.quarantineNewAccounts?.scpPolicyName}/id`,
         );
 
         new DetachQuarantineScp(this, 'DetachQuarantineScp', {
@@ -58,7 +62,12 @@ export class FinalizeStack extends AcceleratorStack {
           logRetentionInDays: props.globalConfig.cloudwatchLogRetentionInDays,
         });
       }
+
+      //
+      // Create NagSuppressions
+      //
+      this.addResourceSuppressionsByPath();
     }
-    Logger.info('[finalize-stack] Completed stack synthesis');
+    this.logger.info('Completed stack synthesis');
   }
 }

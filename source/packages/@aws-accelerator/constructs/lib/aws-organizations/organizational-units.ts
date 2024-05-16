@@ -26,9 +26,9 @@ export interface OrganizationalUnitsProps {
   readonly controlTowerEnabled: boolean;
   readonly organizationsEnabled: boolean;
   /**
-   * Custom resource lambda log group encryption key
+   * Custom resource lambda log group encryption key, when undefined default AWS managed key will be used
    */
-  readonly kmsKey: cdk.aws_kms.Key;
+  readonly kmsKey?: cdk.aws_kms.IKey;
   /**
    * Custom resource lambda log retention in days
    */
@@ -49,7 +49,7 @@ export class OrganizationalUnits extends Construct {
       'Custom::OrganizationsCreateOrganizationalUnits',
       {
         codeDirectory: path.join(__dirname, 'create-organizational-units/dist'),
-        runtime: cdk.CustomResourceProviderRuntime.NODEJS_14_X,
+        runtime: cdk.CustomResourceProviderRuntime.NODEJS_16_X,
         policyStatements: [
           {
             Sid: 'organizations',

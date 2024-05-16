@@ -35,11 +35,11 @@ export interface GuardDutyPublishingDestinationProps {
   /**
    * Publishing destination bucket encryption key
    */
-  readonly destinationKmsKey: cdk.aws_kms.Key;
+  readonly destinationKmsKey: cdk.aws_kms.IKey;
   /**
-   * Custom resource lambda log group encryption key
+   * Custom resource lambda log group encryption key, when undefined default AWS managed key will be used
    */
-  readonly logKmsKey: cdk.aws_kms.Key;
+  readonly logKmsKey?: cdk.aws_kms.IKey;
   /**
    * Custom resource lambda log retention in days
    */
@@ -59,7 +59,7 @@ export class GuardDutyPublishingDestination extends Construct {
 
     const provider = cdk.CustomResourceProvider.getOrCreateProvider(this, RESOURCE_TYPE, {
       codeDirectory: path.join(__dirname, 'create-publishing-destination/dist'),
-      runtime: cdk.CustomResourceProviderRuntime.NODEJS_14_X,
+      runtime: cdk.CustomResourceProviderRuntime.NODEJS_16_X,
       policyStatements: [
         {
           Sid: 'GuardDutyCreatePublishingDestinationCommandTaskGuardDutyActions',
@@ -76,6 +76,12 @@ export class GuardDutyPublishingDestination extends Construct {
           ],
           Resource: '*',
         },
+        {
+          Sid: 'GuardDutyCreateBucketPrefix',
+          Effect: 'Allow',
+          Action: ['s3:ListBucket', 's3:GetObject'],
+          Resource: [props.destinationArn, `${props.destinationArn}/*`],
+        },
       ],
     });
 
@@ -83,7 +89,6 @@ export class GuardDutyPublishingDestination extends Construct {
       resourceType: RESOURCE_TYPE,
       serviceToken: provider.serviceToken,
       properties: {
-        region: cdk.Stack.of(this).region,
         exportDestinationType: props.exportDestinationType,
         exportDestinationOverride: props.exportDestinationOverride,
         destinationArn: props.destinationArn,

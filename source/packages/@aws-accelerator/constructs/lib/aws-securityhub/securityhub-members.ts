@@ -21,9 +21,9 @@ const path = require('path');
  */
 export interface SecurityHubMembersProps {
   /**
-   * Custom resource lambda log group encryption key
+   * Custom resource lambda log group encryption key, when undefined default AWS managed key will be used
    */
-  readonly kmsKey: cdk.aws_kms.IKey;
+  readonly kmsKey?: cdk.aws_kms.IKey;
   /**
    * Custom resource lambda log retention in days
    */
@@ -44,7 +44,7 @@ export class SecurityHubMembers extends Construct {
 
     const provider = cdk.CustomResourceProvider.getOrCreateProvider(this, RESOURCE_TYPE, {
       codeDirectory: path.join(__dirname, 'create-members/dist'),
-      runtime: cdk.CustomResourceProviderRuntime.NODEJS_14_X,
+      runtime: cdk.CustomResourceProviderRuntime.NODEJS_16_X,
       policyStatements: [
         {
           Sid: 'SecurityHubCreateMembersTaskOrganizationAction',

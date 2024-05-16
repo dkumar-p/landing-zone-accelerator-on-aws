@@ -26,9 +26,9 @@ export interface AccountProps {
   readonly commitId: string;
   readonly assumeRoleName: string;
   /**
-   * Custom resource lambda log group encryption key
+   * Custom resource lambda log group encryption key, when undefined default AWS managed key will be used
    */
-  readonly kmsKey: cdk.aws_kms.Key;
+  readonly kmsKey?: cdk.aws_kms.IKey;
   /**
    * Custom resource lambda log retention in days
    */
@@ -46,7 +46,7 @@ export class Account extends cdk.Resource {
 
     const provider = cdk.CustomResourceProvider.getOrCreateProvider(this, ENROLL_ACCOUNT_TYPE, {
       codeDirectory: path.join(__dirname, 'invite-account-to-organization/dist'),
-      runtime: cdk.CustomResourceProviderRuntime.NODEJS_14_X,
+      runtime: cdk.CustomResourceProviderRuntime.NODEJS_16_X,
       policyStatements: [
         {
           Effect: 'Allow',

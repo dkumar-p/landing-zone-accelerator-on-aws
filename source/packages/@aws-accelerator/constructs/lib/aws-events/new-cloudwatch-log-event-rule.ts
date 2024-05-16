@@ -33,14 +33,14 @@ export interface NewCloudWatchLogsEventProps {
   logDestinationArn: string;
   /**
    *
-   * KMS key to encrypt the Lambda environment variables
+   * KMS key to encrypt the Lambda environment variables, when undefined default AWS managed key will be used
    */
-  lambdaEnvKey: cdk.aws_kms.IKey;
+  lambdaEnvKey?: cdk.aws_kms.IKey;
   /**
    *
-   * KMS key to encrypt the Lambda environment variables
+   * KMS key to encrypt the Lambda environment variables, when undefined default AWS managed key will be used
    */
-  logsKmsKey: cdk.aws_kms.IKey;
+  logsKmsKey?: cdk.aws_kms.IKey;
   /**
    *
    * CloudWatch Retention in days from global config
@@ -57,6 +57,14 @@ export interface NewCloudWatchLogsEventProps {
    */
   logArchiveAccountId: string;
   /**
+   * Accelerator Prefix defaults to 'AWSAccelerator'.
+   */
+  acceleratorPrefix: string;
+  /**
+   * Use existing IAM roles for deployment.
+   */
+  useExistingRoles: boolean;
+  /**
    * CloudWatch Logs exclusion setting
    */
   exclusionSetting?: cloudwatchExclusionProcessedItem;
@@ -68,6 +76,14 @@ export interface NewCloudWatchLogsEventProps {
 export class NewCloudWatchLogEvent extends Construct {
   constructor(scope: Construct, id: string, props: NewCloudWatchLogsEventProps) {
     super(scope, id);
+    let LogSubscriptionRole: string;
+    if (props.useExistingRoles) {
+      LogSubscriptionRole = `arn:${cdk.Stack.of(this).partition}:iam::${cdk.Stack.of(this).account}:role/${
+        props.acceleratorPrefix
+      }LogReplicationRole-${cdk.Stack.of(this).region}`;
+    } else {
+      LogSubscriptionRole = props.subscriptionFilterRoleArn;
+    }
 
     const newLogGroupRule = new cdk.aws_events.Rule(this, 'NewLogGroupCreatedRule', {
       eventPattern: {
@@ -81,22 +97,42 @@ export class NewCloudWatchLogEvent extends Construct {
     });
 
     // Lambda function that sets expiration and puts subscription filter on
+    const lambdaEnvironmentList:
+      | {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          [key: string]: any;
+        }[] = [
+      { LogRetention: props.logsRetentionInDaysValue },
+      { LogDestination: props.logDestinationArn },
+      { LogSubscriptionRole: LogSubscriptionRole },
+      { LogExclusion: JSON.stringify(props.exclusionSetting!) },
+    ];
+
+    if (props.logsKmsKey) {
+      lambdaEnvironmentList.push({ LogKmsKeyArn: props.logsKmsKey.keyArn });
+    }
+
+    const lambdaEnvironment: {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      [key: string]: any;
+    } = {};
+
+    for (const environmentVariable of lambdaEnvironmentList) {
+      for (const [key, value] of Object.entries(environmentVariable)) {
+        lambdaEnvironment[key] = value;
+      }
+    }
+
     const setLogRetentionSubscriptionFunction = new cdk.aws_lambda.Function(
       this,
       'SetLogRetentionSubscriptionFunction',
       {
-        runtime: cdk.aws_lambda.Runtime.NODEJS_14_X,
+        runtime: cdk.aws_lambda.Runtime.NODEJS_16_X,
         timeout: cdk.Duration.minutes(15),
         handler: 'index.handler',
         code: cdk.aws_lambda.Code.fromAsset(path.join(__dirname, 'put-subscription-policy/dist')),
         environmentEncryption: props.lambdaEnvKey,
-        environment: {
-          LogRetention: props.logsRetentionInDaysValue,
-          LogDestination: props.logDestinationArn,
-          LogSubscriptionRole: props.subscriptionFilterRoleArn,
-          LogKmsKeyArn: props.logsKmsKey.keyArn,
-          LogExclusion: JSON.stringify(props.exclusionSetting!),
-        },
+        environment: lambdaEnvironment,
         initialPolicy: [
           new cdk.aws_iam.PolicyStatement({
             actions: [

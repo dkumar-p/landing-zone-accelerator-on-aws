@@ -28,9 +28,9 @@ export interface EndpointAddressesProps {
    */
   readonly endpointId: string;
   /**
-   * Custom resource lambda log group encryption key
+   * Custom resource lambda log group encryption key, when undefined default AWS managed key will be used
    */
-  readonly kmsKey: cdk.aws_kms.Key;
+  readonly kmsKey?: cdk.aws_kms.IKey;
   /**
    * Custom resource lambda log retention in days
    */
@@ -45,7 +45,7 @@ export class EndpointAddresses extends cdk.Resource implements IEndpointAddresse
 
     const provider = cdk.CustomResourceProvider.getOrCreateProvider(this, 'Custom::ResolverEndpointAddresses', {
       codeDirectory: path.join(__dirname, 'get-endpoint-addresses/dist'),
-      runtime: cdk.CustomResourceProviderRuntime.NODEJS_14_X,
+      runtime: cdk.CustomResourceProviderRuntime.NODEJS_16_X,
       policyStatements: [
         {
           Effect: 'Allow',

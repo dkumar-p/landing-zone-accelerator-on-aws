@@ -54,9 +54,9 @@ export interface QueryLoggingConfigProps {
   readonly organizationId?: string;
 
   /**
-   * Custom resource lambda log group encryption key
+   * Custom resource lambda log group encryption key, when undefined default AWS managed key will be used
    */
-  readonly kmsKey: cdk.aws_kms.Key;
+  readonly kmsKey?: cdk.aws_kms.IKey;
   /**
    * Custom resource lambda log retention in days
    */
@@ -69,7 +69,7 @@ export class QueryLoggingConfig extends cdk.Resource implements IQueryLoggingCon
   public readonly name: string;
   private destinationArn: string;
   private logRetentionInDays: number;
-  private kmsKey: cdk.aws_kms.Key;
+  private kmsKey: cdk.aws_kms.IKey | undefined;
 
   constructor(scope: Construct, id: string, props: QueryLoggingConfigProps) {
     super(scope, id);
@@ -130,7 +130,7 @@ export class QueryLoggingConfig extends cdk.Resource implements IQueryLoggingCon
     // Use custom resource
     const provider = cdk.CustomResourceProvider.getOrCreateProvider(this, 'Custom::LogResourcePolicy', {
       codeDirectory: path.join(__dirname, 'log-resource-policy/dist'),
-      runtime: cdk.CustomResourceProviderRuntime.NODEJS_14_X,
+      runtime: cdk.CustomResourceProviderRuntime.NODEJS_16_X,
       policyStatements: [
         {
           Effect: 'Allow',
@@ -178,7 +178,7 @@ export class QueryLoggingConfig extends cdk.Resource implements IQueryLoggingCon
     // Use custom resource
     const provider = cdk.CustomResourceProvider.getOrCreateProvider(this, 'Custom::QueryLoggingConfig', {
       codeDirectory: path.join(__dirname, 'query-logging-config/dist'),
-      runtime: cdk.CustomResourceProviderRuntime.NODEJS_14_X,
+      runtime: cdk.CustomResourceProviderRuntime.NODEJS_16_X,
       policyStatements: [
         {
           Effect: 'Allow',
@@ -247,9 +247,9 @@ export interface QueryLoggingConfigAssociationProps {
   readonly partition: string;
 
   /**
-   * Custom resource lambda log group encryption key
+   * Custom resource lambda log group encryption key, when undefined default AWS managed key will be used
    */
-  readonly kmsKey: cdk.aws_kms.Key;
+  readonly kmsKey?: cdk.aws_kms.IKey;
   /**
    * Custom resource lambda log retention in days
    */
@@ -260,7 +260,7 @@ export class QueryLoggingConfigAssociation extends cdk.Resource {
   private vpcId: string | undefined;
   private resolverQueryLogConfigId: string | undefined;
   private logRetentionInDays: number;
-  private kmsKey: cdk.aws_kms.Key;
+  private kmsKey: cdk.aws_kms.IKey | undefined;
 
   constructor(scope: Construct, id: string, props: QueryLoggingConfigAssociationProps) {
     super(scope, id);
@@ -283,7 +283,7 @@ export class QueryLoggingConfigAssociation extends cdk.Resource {
     // Use custom resource
     const provider = cdk.CustomResourceProvider.getOrCreateProvider(this, 'Custom::QueryLoggingConfigAssociation', {
       codeDirectory: path.join(__dirname, 'query-logging-config-association/dist'),
-      runtime: cdk.CustomResourceProviderRuntime.NODEJS_14_X,
+      runtime: cdk.CustomResourceProviderRuntime.NODEJS_16_X,
       policyStatements: [
         {
           Effect: 'Allow',

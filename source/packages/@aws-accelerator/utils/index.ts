@@ -11,5 +11,16 @@
  *  and limitations under the License.
  */
 
+export * from './lib/common-resources';
+export * from './lib/common-functions';
+export * from './lib/logger';
 export * from './lib/policy-replacements';
+export * from './lib/set-organizations-client';
+export * from './lib/ssm-parameter-path';
 export * from './lib/throttle';
+export * from './lib/load-organization-config';
+export * from './lib/get-template';
+export * from './lib/diff-stack';
+export * from './lib/regions';
+export * from './lib/set-token-preferences';
+export * from './lib/evaluate-limits';

@@ -1,5 +1,5 @@
 /**
- *  Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ *  Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License"). You may not use this file except in compliance
  *  with the License. A copy of the License is located at
@@ -11,27 +11,30 @@
  *  and limitations under the License.
  */
 
-import * as cdk from 'aws-cdk-lib';
-
-import { Policy, PolicyType } from '../../index';
+import { Stack } from 'aws-cdk-lib';
+import { Key } from 'aws-cdk-lib/aws-kms';
+import { Policy, PolicyType } from '../../lib/aws-organizations/policy';
 import { snapShotTest } from '../snapshot-test';
+import { describe } from '@jest/globals';
 
 const testNamePrefix = 'Construct(Policy): ';
 
 //Initialize stack for snapshot test and resource configuration test
-const stack = new cdk.Stack();
+const stack = new Stack();
 
 new Policy(stack, 'Policy', {
-  path: '.',
+  path: __filename,
   name: 'TestPolicy',
   partition: 'aws',
   description: 'Testing Policy construct',
   type: PolicyType.SERVICE_CONTROL_POLICY,
+  strategy: 'deny-list',
+  acceleratorPrefix: 'AWSAccelerator',
   tags: [
     { Key: 'name', Value: 'TestPolicy' },
     { Key: 'usage', Value: 'ConstructTest' },
   ],
-  kmsKey: new cdk.aws_kms.Key(stack, 'CustomKey', {}),
+  kmsKey: new Key(stack, 'CustomKey', {}),
   logRetentionInDays: 3653,
 });
 

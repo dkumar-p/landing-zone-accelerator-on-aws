@@ -26,9 +26,9 @@ export interface DocumentProps {
   readonly documentType: string;
   readonly sharedWithAccountIds: string[];
   /**
-   * Custom resource lambda log group encryption key
+   * Custom resource lambda log group encryption key, when undefined default AWS managed key will be used
    */
-  readonly kmsKey: cdk.aws_kms.IKey;
+  readonly kmsKey?: cdk.aws_kms.IKey;
   /**
    * Custom resource lambda log retention in days
    */
@@ -45,6 +45,7 @@ export class Document extends cdk.Resource implements IDocument {
       name: props.name,
       content: props.content,
       documentType: props.documentType,
+      updateMethod: 'NewVersion',
     });
 
     this.documentName = document.ref;
@@ -55,7 +56,7 @@ export class Document extends cdk.Resource implements IDocument {
 
       const provider = cdk.CustomResourceProvider.getOrCreateProvider(this, SHARE_SSM_DOCUMENT, {
         codeDirectory: path.join(__dirname, 'share-document/dist'),
-        runtime: cdk.CustomResourceProviderRuntime.NODEJS_14_X,
+        runtime: cdk.CustomResourceProviderRuntime.NODEJS_16_X,
         policyStatements: [
           {
             Sid: 'ShareDocumentActions',

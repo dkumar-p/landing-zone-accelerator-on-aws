@@ -24,9 +24,9 @@ export interface CreateControlTowerAccountsProps {
   readonly table: cdk.aws_dynamodb.ITable;
   readonly portfolioId: string;
   /**
-   * Custom resource lambda log group encryption key
+   * Custom resource lambda log group encryption key, when undefined default AWS managed key will be used
    */
-  readonly kmsKey: cdk.aws_kms.Key;
+  readonly kmsKey?: cdk.aws_kms.IKey;
   /**
    * Custom resource lambda log retention in days
    */
@@ -49,7 +49,7 @@ export class CreateControlTowerAccounts extends Construct {
 
     this.onEvent = new cdk.aws_lambda.Function(this, 'CreateControlTowerAccount', {
       code: cdk.aws_lambda.Code.fromAsset(path.join(__dirname, 'create-accounts/dist')),
-      runtime: cdk.aws_lambda.Runtime.NODEJS_14_X,
+      runtime: cdk.aws_lambda.Runtime.NODEJS_16_X,
       handler: 'index.handler',
       timeout: cdk.Duration.minutes(1),
       description: 'Create Control Tower Account onEvent handler',
@@ -126,7 +126,7 @@ export class CreateControlTowerAccounts extends Construct {
     });
     this.isComplete = new cdk.aws_lambda.Function(this, 'CreateControlTowerAccountStatus', {
       code: cdk.aws_lambda.Code.fromAsset(path.join(__dirname, 'create-accounts-status/dist')),
-      runtime: cdk.aws_lambda.Runtime.NODEJS_14_X,
+      runtime: cdk.aws_lambda.Runtime.NODEJS_16_X,
       handler: 'index.handler',
       timeout: cdk.Duration.minutes(5),
       description: 'Create Control Tower Account isComplete handler',
@@ -155,7 +155,7 @@ export class CreateControlTowerAccounts extends Construct {
     this.provider = new cdk.custom_resources.Provider(this, 'CreateControlTowerAcccountsProvider', {
       onEventHandler: this.onEvent,
       isCompleteHandler: this.isComplete,
-      queryInterval: cdk.Duration.minutes(1),
+      queryInterval: cdk.Duration.seconds(30),
       totalTimeout: cdk.Duration.hours(4),
     });
 

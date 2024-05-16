@@ -34,9 +34,9 @@ interface GetNetworkFirewallEndpointProps {
   readonly firewallArn: string;
 
   /**
-   * Custom resource lambda log group encryption key
+   * Custom resource lambda log group encryption key, when undefined default AWS managed key will be used
    */
-  readonly kmsKey: cdk.aws_kms.Key;
+  readonly kmsKey?: cdk.aws_kms.IKey;
 
   /**
    * Custom resource lambda log retention in days
@@ -57,11 +57,11 @@ export class GetNetworkFirewallEndpoint extends cdk.Resource implements IGetNetw
 
     const provider = cdk.CustomResourceProvider.getOrCreateProvider(this, 'Custom::GetNetworkFirewallEndpoint', {
       codeDirectory: path.join(__dirname, 'get-network-firewall-endpoint/dist'),
-      runtime: cdk.CustomResourceProviderRuntime.NODEJS_14_X,
+      runtime: cdk.CustomResourceProviderRuntime.NODEJS_16_X,
       policyStatements: [
         {
           Effect: 'Allow',
-          Action: ['network-firewall:DescribeFirewall'],
+          Action: ['ec2:DescribeAvailabilityZones', 'network-firewall:DescribeFirewall'],
           Resource: '*',
         },
       ],

@@ -30,9 +30,9 @@ export interface FMSOrganizationalAdminAccountProps {
    */
   readonly adminAccountId: string;
   /**
-   * Custom resource lambda log group encryption key
+   * Custom resource lambda log group encryption key, when undefined default AWS managed key will be used
    */
-  readonly kmsKey: cdk.aws_kms.Key;
+  readonly kmsKey?: cdk.aws_kms.IKey;
   /**
    * Custom resource lambda log retention in days
    */
@@ -50,7 +50,7 @@ export class FMSOrganizationAdminAccount extends Construct {
     const functionId = `${id}ProviderLambda`;
     const providerLambda = new cdk.aws_lambda.Function(this, functionId, {
       code: cdk.aws_lambda.Code.fromAsset(path.join(__dirname, 'enable-organization-admin-account/dist')),
-      runtime: cdk.aws_lambda.Runtime.NODEJS_14_X,
+      runtime: cdk.aws_lambda.Runtime.NODEJS_16_X,
       timeout: cdk.Duration.seconds(180),
       initialPolicy: [
         new cdk.aws_iam.PolicyStatement({
@@ -74,9 +74,13 @@ export class FMSOrganizationAdminAccount extends Construct {
             'organizations:ListParents',
             'organizations:ListRoots',
             'organizations:RegisterDelegatedAdministrator',
-            'sts:AssumeRole',
           ],
           resources: ['*'],
+        }),
+        new cdk.aws_iam.PolicyStatement({
+          effect: cdk.aws_iam.Effect.ALLOW,
+          actions: ['sts:AssumeRole'],
+          resources: [`arn:${cdk.Stack.of(this).partition}:iam::${props.adminAccountId}:role/${props.assumeRole}`],
         }),
       ],
       handler: 'index.handler',
@@ -92,6 +96,7 @@ export class FMSOrganizationAdminAccount extends Construct {
         adminAccountId: props.adminAccountId,
         assumeRoleName: props.assumeRole,
         partition: cdk.Stack.of(scope).partition,
+        region: cdk.Stack.of(this).region,
       },
     });
 

@@ -14,6 +14,7 @@
 import * as cdk from 'aws-cdk-lib';
 import { ShareSubnetTags } from '../../lib/aws-ram/share-subnet-tags';
 import { snapShotTest } from '../snapshot-test';
+import { describe } from '@jest/globals';
 
 const testNamePrefix = 'Construct(ShareSubnetTest): ';
 
@@ -28,6 +29,7 @@ new ShareSubnetTags(stack, 'ShareSubnetTags', {
   subnetName: 'TestSubnet',
   resourceLoggingKmsKey: new cdk.aws_kms.Key(stack, 'CustomKey', {}),
   logRetentionInDays: 3653,
+  acceleratorSsmParamPrefix: '/accelerator',
 });
 
 /**

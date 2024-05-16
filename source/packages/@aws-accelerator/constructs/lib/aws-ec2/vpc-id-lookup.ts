@@ -25,13 +25,13 @@ export interface VpcIdLookupProps {
    */
   readonly vpcName: string;
   /**
-   * Custom resource lambda key
+   * Custom resource lambda key, when undefined default AWS managed key will be used
    */
-  readonly lambdaKey: cdk.aws_kms.IKey;
+  readonly lambdaKey?: cdk.aws_kms.IKey;
   /**
-   * Custom resource CloudWatch log group encryption key
+   * Custom resource CloudWatch log group encryption key, when undefined default AWS managed key will be used
    */
-  readonly cloudwatchKey: cdk.aws_kms.IKey;
+  readonly cloudwatchKey?: cdk.aws_kms.IKey;
   /**
    * Custom resource CloudWatch log retention in days
    */
@@ -48,7 +48,7 @@ export class VpcIdLookup extends Construct {
 
     const providerLambda = new cdk.aws_lambda.Function(this, 'VpcIdLookupFunction', {
       code: cdk.aws_lambda.Code.fromAsset(path.join(__dirname, 'get-vpc-id/dist')),
-      runtime: cdk.aws_lambda.Runtime.NODEJS_14_X,
+      runtime: cdk.aws_lambda.Runtime.NODEJS_16_X,
       handler: 'index.handler',
       timeout: cdk.Duration.minutes(15),
       description: 'Lookup vpc id from account',

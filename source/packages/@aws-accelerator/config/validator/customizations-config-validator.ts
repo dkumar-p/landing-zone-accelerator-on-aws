@@ -14,6 +14,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
+import { createLogger } from '@aws-accelerator/utils';
+
 import { AccountsConfig } from '../lib/accounts-config';
 import * as t from '../lib/common-types';
 import {
@@ -21,69 +23,100 @@ import {
   CustomizationsConfig,
   CustomizationsConfigTypes,
   NlbTargetTypeConfig,
+  ApplicationLoadBalancerConfig,
+  TargetGroupItemConfig,
+  NetworkLoadBalancerConfig,
+  Ec2FirewallInstanceConfig,
+  Ec2FirewallAutoScalingGroupConfig,
 } from '../lib/customizations-config';
-import { OrganizationConfig } from '../lib/organization-config';
-import { NetworkConfig, NetworkConfigTypes, VpcConfig, VpcTemplatesConfig } from '../lib/network-config';
-import console from 'console';
-import { SecurityConfig } from '../lib/security-config';
 import { GlobalConfig } from '../lib/global-config';
-import { Region } from '../lib/common-types';
+import { IamConfig } from '../lib/iam-config';
+import { NetworkConfig, NetworkConfigTypes, SubnetConfig, VpcConfig, VpcTemplatesConfig } from '../lib/network-config';
+import { OrganizationConfig } from '../lib/organization-config';
+import { SecurityConfig } from '../lib/security-config';
+import { CommonValidatorFunctions } from './common/common-validator-functions';
 
 /**
  * Customizations Configuration validator.
  * Validates customization configuration
  */
 export class CustomizationsConfigValidator {
-  constructor(configDir: string) {
-    const values = CustomizationsConfig.load(configDir);
+  constructor(
+    values: CustomizationsConfig,
+    accountsConfig: AccountsConfig,
+    globalConfig: GlobalConfig,
+    iamConfig: IamConfig,
+    networkConfig: NetworkConfig,
+    organizationConfig: OrganizationConfig,
+    securityConfig: SecurityConfig,
+    configDir: string,
+  ) {
     const ouIdNames: string[] = ['Root'];
-    const accountNames: string[] = [];
 
     const errors: string[] = [];
+    const logger = createLogger(['customizations-config-validator']);
 
-    console.log(`[customizations-config-validator.ts]: ${CustomizationsConfig.FILENAME} file validation started`);
+    logger.info(`${CustomizationsConfig.FILENAME} file validation started`);
 
     //
     // Get list of OU ID names from organization config file
-    this.getOuIdNames(configDir, ouIdNames);
+    ouIdNames.push(...this.getOuIdNames(organizationConfig));
 
     //
     // Get list of Account names from account config file
-    this.getAccountNames(configDir, accountNames);
+    const accountNames = this.getAccountNames(accountsConfig);
+
+    //
+    // Instantiate helper methods
+    const helpers = new CustomizationHelperMethods(accountsConfig, iamConfig, globalConfig);
 
     //
     // Start Validation
     // Validate customizations
-    new CustomizationValidator(values, ouIdNames, configDir, accountNames, errors);
+    new CustomizationValidator(
+      values,
+      accountsConfig,
+      globalConfig,
+      networkConfig,
+      securityConfig,
+      ouIdNames,
+      configDir,
+      accountNames,
+      helpers,
+      errors,
+    );
 
     // Validate firewalls
-    new FirewallValidator(values, configDir, errors);
+    new FirewallValidator(values, networkConfig, securityConfig, accountsConfig, configDir, helpers, errors);
 
     if (errors.length) {
-      throw new Error(`${CustomizationsConfig.FILENAME} has ${errors.length} issues: ${errors.join(' ')}`);
+      throw new Error(`${CustomizationsConfig.FILENAME} has ${errors.length} issues:\n${errors.join('\n')}`);
     }
   }
   /**
    * Prepare list of OU ids from organization config file
-   * @param configDir
+   * @param organizationConfig
+   * @returns
    */
-  private getOuIdNames(configDir: string, ouIdNames: string[]) {
-    for (const organizationalUnit of OrganizationConfig.load(configDir).organizationalUnits) {
+  private getOuIdNames(organizationConfig: OrganizationConfig): string[] {
+    const ouIdNames: string[] = [];
+    for (const organizationalUnit of organizationConfig.organizationalUnits) {
       ouIdNames.push(organizationalUnit.name);
     }
+    return ouIdNames;
   }
 
   /**
    * Prepare list of Account names from account config file
    * @param configDir
    */
-  private getAccountNames(configDir: string, accountNames: string[]) {
-    for (const accountItem of [
-      ...AccountsConfig.load(configDir).mandatoryAccounts,
-      ...AccountsConfig.load(configDir).workloadAccounts,
-    ]) {
+  private getAccountNames(accountsConfig: AccountsConfig): string[] {
+    const accountNames: string[] = [];
+
+    for (const accountItem of [...accountsConfig.mandatoryAccounts, ...accountsConfig.workloadAccounts]) {
       accountNames.push(accountItem.name);
     }
+    return accountNames;
   }
 }
 
@@ -93,9 +126,14 @@ export class CustomizationsConfigValidator {
 class CustomizationValidator {
   constructor(
     values: CustomizationsConfig,
+    accountsConfig: AccountsConfig,
+    globalConfig: GlobalConfig,
+    networkConfig: NetworkConfig,
+    securityConfig: SecurityConfig,
     ouIdNames: string[],
     configDir: string,
     accountNames: string[],
+    helpers: CustomizationHelperMethods,
     errors: string[],
   ) {
     // Validate deployment target Account Names
@@ -114,7 +152,21 @@ class CustomizationValidator {
     this.validateTemplateFile(configDir, values, errors);
 
     // Validate applications inputs
-    this.validateApplicationsInputs(configDir, values, errors);
+    this.validateApplicationsInputs(
+      values,
+      {
+        configDir,
+        accountsConfig,
+        globalConfig,
+        networkConfig,
+        securityConfig,
+      },
+      helpers,
+      errors,
+    );
+
+    // Validate Service Catalog portfolio inputs
+    this.validateServiceCatalogInputs(values, accountsConfig, errors, accountNames, ouIdNames);
   }
 
   /**
@@ -139,6 +191,17 @@ class CustomizationValidator {
         errors.push(
           `Invalid or missing template file ${cloudFormationStackSet.template} for CloudFormation StackSet ${cloudFormationStackSet.name} !!!`,
         );
+      }
+    }
+    for (const serviceCatalogPortfolio of values.customizations?.serviceCatalogPortfolios ?? []) {
+      for (const serviceCatalogProduct of serviceCatalogPortfolio.products ?? []) {
+        for (const productVersion of serviceCatalogProduct.versions ?? []) {
+          if (!fs.existsSync(path.join(configDir, productVersion.template))) {
+            errors.push(
+              `Product version ${productVersion.name} template file ${productVersion.template} of portfolio ${serviceCatalogPortfolio.name} not found !!!`,
+            );
+          }
+        }
       }
     }
   }
@@ -258,51 +321,73 @@ class CustomizationValidator {
    * @param errors
    */
   private validateApplicationsInputs(
-    configDir: string,
     values: t.TypeOf<typeof CustomizationsConfigTypes.customizationsConfig>,
+    configs: {
+      configDir: string;
+      accountsConfig: AccountsConfig;
+      globalConfig: GlobalConfig;
+      networkConfig: NetworkConfig;
+      securityConfig: SecurityConfig;
+    },
+    helpers: CustomizationHelperMethods,
     errors: string[],
   ) {
-    const loadNetworkConfig = NetworkConfig.load(configDir);
-    const loadSecurityConfig = SecurityConfig.load(configDir);
-    const loadGlobalConfig = GlobalConfig.load(configDir);
-    const helpers = new CustomizationHelperMethods();
     const appNames: string[] = [];
     for (const app of values.applications ?? []) {
       appNames.push(app.name);
 
       //check if appName with prefixes is over 128 characters
-      // @ts-ignore
-      this.checkAppName(app, loadGlobalConfig, errors);
+      this.checkAppName(app as AppConfigItem, configs.globalConfig, errors);
       // check if vpc actually exists
-      const vpcCheck = helpers.checkVpcInConfig(app.vpc, loadNetworkConfig);
+      const vpcCheck = helpers.checkVpcInConfig(app.vpc, configs.networkConfig);
       if (!vpcCheck) {
-        errors.push(`[Application ${app.name}: VPC ${app.vpc} does not exist in file network-config.yaml]`);
+        errors.push(`Application ${app.name}: VPC ${app.vpc} does not exist in file network-config.yaml`);
+      } else if (vpcCheck) {
+        if (app.applicationLoadBalancer) {
+          this.checkAlb(
+            app.applicationLoadBalancer as ApplicationLoadBalancerConfig,
+            vpcCheck,
+            {
+              networkConfig: configs.networkConfig,
+              accountsConfig: configs.accountsConfig,
+              globalConfig: configs.globalConfig,
+            },
+            {
+              appName: app.name,
+              appVpc: app.vpc,
+              appTargetGroups: (app.targetGroups as TargetGroupItemConfig[]) ?? undefined,
+              deploymentTargets: app.deploymentTargets as t.DeploymentTargets,
+            },
+            helpers,
+            errors,
+          );
+        }
+        if (app.networkLoadBalancer) {
+          this.checkNlb(
+            app.networkLoadBalancer as NetworkLoadBalancerConfig,
+            vpcCheck,
+            {
+              networkConfig: configs.networkConfig,
+              accountsConfig: configs.accountsConfig,
+              globalConfig: configs.globalConfig,
+            },
+            {
+              appName: app.name,
+              appVpc: app.vpc,
+              appTargetGroups: (app.targetGroups as TargetGroupItemConfig[]) ?? undefined,
+              deploymentTargets: app.deploymentTargets as t.DeploymentTargets,
+            },
+            helpers,
+            errors,
+          );
+        }
+        this.checkLaunchTemplate(app as AppConfigItem, vpcCheck, helpers, configs.securityConfig, errors);
+        this.checkAutoScaling(app as AppConfigItem, vpcCheck, helpers, configs.accountsConfig, errors);
       }
-      // Validate app name
-      if (!app.name) {
-        errors.push(`[Application ${app.name}]: Application name is required`);
-      }
-
-      // Validate app vpc
-      if (!app.vpc) {
-        errors.push(`[Application ${app.vpc}]: Application vpc is required`);
-      }
-
-      if (vpcCheck) {
-        // @ts-ignore
-        this.checkAlb(app, vpcCheck, helpers, errors);
-        // @ts-ignore
-        this.checkNlb(app, vpcCheck, helpers, errors);
-        // @ts-ignore
-        this.checkLaunchTemplate(app, vpcCheck, helpers, loadSecurityConfig, errors);
-        // @ts-ignore
-        this.checkAutoScaling(app, vpcCheck, helpers, errors);
-      }
-
       // Validate file
-      if (app.launchTemplate) {
-        if (!fs.existsSync(path.join(configDir, app.launchTemplate.userData!))) {
-          errors.push(`Launch Template file ${app.launchTemplate.userData!} not found, for ${app.name} !!!`);
+      if (app.launchTemplate?.userData) {
+        if (!fs.existsSync(path.join(configs.configDir, app.launchTemplate.userData))) {
+          errors.push(`Launch Template file ${app.launchTemplate.userData} not found, for ${app.name} !!!`);
         }
       }
     }
@@ -317,8 +402,18 @@ class CustomizationValidator {
     }
   }
   private checkAppName(app: AppConfigItem, globalConfig: GlobalConfig, errors: string[]) {
+    // Validate app name
+    if (!app.name) {
+      errors.push(`[Application ${app.name}]: Application name is required`);
+    }
+
+    // Validate app vpc
+    if (!app.vpc) {
+      errors.push(`[Application ${app.vpc}]: Application vpc is required`);
+    }
+
     const allEnabledRegions = globalConfig.enabledRegions;
-    let filteredRegions: Region[];
+    let filteredRegions: t.Region[];
     if (app.deploymentTargets.excludedAccounts && app.deploymentTargets.excludedAccounts.length > 0) {
       filteredRegions = allEnabledRegions.filter(obj => !app.deploymentTargets.excludedAccounts.includes(obj));
     } else {
@@ -331,7 +426,8 @@ class CustomizationValidator {
   }
   private checkAppNameLength(appName: string, targetRegion: string[], errors: string[]) {
     for (const regionItem of targetRegion) {
-      const stackName = `AWSAccelerator-App-${appName}-0123456789012-${regionItem}`;
+      const solutionPrefix = process.env['ACCELERATOR_PREFIX'] ?? 'AWSAccelerator';
+      const stackName = `${solutionPrefix}-App-${appName}-0123456789012-${regionItem}`;
       if (stackName.length > 128) {
         errors.push(`[Application ${appName}]: Application name ${stackName} is over 128 characters.`);
       }
@@ -345,19 +441,13 @@ class CustomizationValidator {
     errors: string[],
   ) {
     if (app.launchTemplate) {
-      if (app.launchTemplate!.securityGroups.length === 0) {
-        errors.push(
-          `Launch Template ${app.launchTemplate!.name} does not have security groups in ${
-            app.name
-          }. At least one security group is required`,
-        );
-      }
-      const ltSgCheck = helpers.checkSecurityGroupInConfig(app.launchTemplate!.securityGroups, vpcCheck);
+      const launchTemplateSecurityGroups = app.launchTemplate.securityGroups ?? [];
+      const ltSgCheck = helpers.checkSecurityGroupInConfig(launchTemplateSecurityGroups, vpcCheck);
       if (ltSgCheck === false) {
         errors.push(
           `Launch Template ${
             app.launchTemplate!.name
-          } does not have security groups ${app.launchTemplate!.securityGroups.join(',')} in VPC ${app.vpc}.`,
+          } does not have security groups ${launchTemplateSecurityGroups.join(',')} in VPC ${app.vpc}.`,
         );
       }
       if (app.launchTemplate.blockDeviceMappings) {
@@ -375,10 +465,11 @@ class CustomizationValidator {
     app: AppConfigItem,
     vpcCheck: VpcConfig | VpcTemplatesConfig,
     helpers: CustomizationHelperMethods,
+    accountsConfig: AccountsConfig,
     errors: string[],
   ) {
     if (app.autoscaling) {
-      const allTargetGroupNames = app.targetGroups!.map(tg => tg.name);
+      const allTargetGroupNames = app.targetGroups?.map(tg => tg.name);
       const asgTargetGroupNames = app.autoscaling.targetGroups ?? [];
       const compareTargetGroupNames = helpers.compareArrays(asgTargetGroupNames, allTargetGroupNames ?? []);
       if (compareTargetGroupNames.length > 0) {
@@ -387,7 +478,7 @@ class CustomizationValidator {
             app.autoscaling.name
           } has target groups that are not defined in application config. Autoscaling target groups: ${asgTargetGroupNames.join(
             ',',
-          )} all target groups:  ${allTargetGroupNames.join(',')}`,
+          )} all target groups:  ${allTargetGroupNames?.join(',')}`,
         );
       }
       const duplicateAsgSubnets = app.autoscaling.subnets.some(element => {
@@ -400,133 +491,424 @@ class CustomizationValidator {
           }. Subnets: ${app.autoscaling!.subnets.join(',')}`,
         );
       }
-      const asgSubnetsCheck = helpers.checkSubnetsInConfig(app.autoscaling!.subnets, vpcCheck);
+      const asgSubnetsCheck = helpers.checkSubnetsInConfig(app.autoscaling.subnets, vpcCheck);
       if (asgSubnetsCheck === false) {
         errors.push(
-          `Autoscaling group ${app.autoscaling!.name} does not have subnets ${app.autoscaling!.subnets.join(
+          `Autoscaling group ${app.autoscaling.name} does not have subnets ${app.autoscaling!.subnets.join(
             ',',
           )} in VPC ${app.vpc}`,
+        );
+      }
+      if (
+        asgSubnetsCheck &&
+        !this.checkSubnetsTarget(app.autoscaling.subnets, vpcCheck, app.deploymentTargets, accountsConfig, errors)
+      ) {
+        errors.push(
+          `AutoScaling group ${app.autoscaling.name} has subnets ${app.autoscaling.subnets.join(
+            ',',
+          )} which are not created or shared in deploymentTargets`,
         );
       }
     }
   }
 
   private checkNlb(
-    app: AppConfigItem,
+    nlb: NetworkLoadBalancerConfig,
     vpcCheck: VpcConfig | VpcTemplatesConfig,
+    configs: {
+      networkConfig: NetworkConfig;
+      accountsConfig: AccountsConfig;
+      globalConfig: GlobalConfig;
+    },
+    appInfo: {
+      appName: string;
+      appVpc: string;
+      appTargetGroups: TargetGroupItemConfig[] | undefined;
+      deploymentTargets: t.DeploymentTargets;
+    },
     helpers: CustomizationHelperMethods,
     errors: string[],
   ) {
-    if (app.networkLoadBalancer) {
-      if (app.networkLoadBalancer!.subnets.length < 1) {
-        errors.push(
-          `Network Load Balancer ${app.networkLoadBalancer!.name} does not have enough subnets in ${
-            app.name
-          }. At least one subnet is required.`,
-        );
-      }
-      const duplicateNlbSubnets = app.networkLoadBalancer.subnets.some(element => {
-        return (
-          app.networkLoadBalancer!.subnets.indexOf(element) !== app.networkLoadBalancer!.subnets.lastIndexOf(element)
-        );
+    if (nlb.subnets.length < 1) {
+      errors.push(
+        `Network Load Balancer ${nlb.name} does not have enough subnets in ${appInfo.appName}. At least one subnet is required.`,
+      );
+    }
+    const duplicateNlbSubnets = nlb.subnets.some(element => {
+      return nlb.subnets.indexOf(element) !== nlb.subnets.lastIndexOf(element);
+    });
+    if (duplicateNlbSubnets) {
+      errors.push(
+        `There are duplicates in Network Load Balancer ${nlb.name} subnets in ${
+          appInfo.appName
+        }. Subnets: ${nlb.subnets.join(',')}`,
+      );
+    }
+    const nlbSubnetsCheck = helpers.checkSubnetsInConfig(nlb.subnets, vpcCheck);
+    if (nlbSubnetsCheck === false) {
+      errors.push(
+        `Network Load Balancer ${nlb.name} does not have subnets ${nlb.subnets.join(',')} in VPC ${appInfo.appVpc}`,
+      );
+    }
+    if (
+      nlbSubnetsCheck &&
+      !this.checkSubnetsTarget(nlb.subnets, vpcCheck, appInfo.deploymentTargets, configs.accountsConfig, errors)
+    ) {
+      errors.push(
+        `Network Load Balancer ${nlb.name} has subnets ${nlb.subnets.join(
+          ',',
+        )} which are not created or shared in deploymentTargets`,
+      );
+    }
+    const allTargetGroupNames = appInfo.appTargetGroups?.map(tg => tg.name);
+    const nlbTargetGroupNames = nlb.listeners?.map(tg => tg.targetGroup);
+    const compareTargetGroupNames = helpers.compareArrays(nlbTargetGroupNames ?? [], allTargetGroupNames ?? []);
+    if (compareTargetGroupNames.length > 0) {
+      errors.push(
+        `Network Load Balancer ${
+          nlb.name
+        } has target groups that are not defined in application config. NLB target groups: ${nlbTargetGroupNames?.join(
+          ',',
+        )} all target groups:  ${allTargetGroupNames?.join(',')}`,
+      );
+    }
+    const listenerNameCert = (nlb.listeners ?? [])
+      .filter(obj => obj.certificate)
+      .map(obj => {
+        return { name: obj.name, certificate: obj.certificate };
       });
-      if (duplicateNlbSubnets) {
-        errors.push(
-          `There are duplicates in Network Load Balancer ${app.networkLoadBalancer!.name} subnets in ${
-            app.name
-          }. Subnets: ${app.networkLoadBalancer!.subnets.join(',')}`,
-        );
-      }
-      const nlbSubnetsCheck = helpers.checkSubnetsInConfig(app.networkLoadBalancer!.subnets, vpcCheck);
-      if (nlbSubnetsCheck === false) {
-        errors.push(
-          `Network Load Balancer ${
-            app.networkLoadBalancer!.name
-          } does not have subnets ${app.networkLoadBalancer!.subnets.join(',')} in VPC ${app.vpc}`,
-        );
-      }
-      const allTargetGroupNames = app.targetGroups!.map(tg => tg.name);
-      const nlbTargetGroupNames = app.networkLoadBalancer!.listeners!.map(tg => tg.targetGroup);
-      const compareTargetGroupNames = helpers.compareArrays(nlbTargetGroupNames ?? [], allTargetGroupNames ?? []);
-      if (compareTargetGroupNames.length > 0) {
-        errors.push(
-          `Network Load Balancer ${
-            app.networkLoadBalancer!.name
-          } has target groups that are not defined in application config. NLB target groups: ${nlbTargetGroupNames.join(
-            ',',
-          )} all target groups:  ${allTargetGroupNames.join(',')}`,
+    if (listenerNameCert.length > 0) {
+      this.checkListenerCerts(
+        listenerNameCert,
+        nlb.name,
+        appInfo.appName,
+        configs,
+        appInfo.deploymentTargets,
+        'Network Load Balancer',
+        errors,
+      );
+    }
+  }
+
+  private checkAlb(
+    alb: ApplicationLoadBalancerConfig,
+    vpcCheck: VpcConfig | VpcTemplatesConfig,
+    configs: {
+      networkConfig: NetworkConfig;
+      accountsConfig: AccountsConfig;
+      globalConfig: GlobalConfig;
+    },
+    appInfo: {
+      appName: string;
+      appVpc: string;
+      appTargetGroups: TargetGroupItemConfig[] | undefined;
+      deploymentTargets: t.DeploymentTargets;
+    },
+    helpers: CustomizationHelperMethods,
+    errors: string[],
+  ) {
+    if (alb.securityGroups.length === 0) {
+      errors.push(
+        `Application Load Balancer ${alb.name} does not have security groups in ${appInfo.appName}. At least one security group is required`,
+      );
+    }
+    const albSgCheck = helpers.checkSecurityGroupInConfig(alb.securityGroups, vpcCheck);
+    if (albSgCheck === false) {
+      errors.push(`Application Load Balancer ${alb.name} does not have security groups in VPC ${appInfo.appVpc}.`);
+    }
+    if (alb.subnets.length < 2) {
+      errors.push(
+        `Application Load Balancer ${alb.name} does not have enough subnets in ${appInfo.appName}. At least two subnets are required in different AZs`,
+      );
+    }
+    const duplicateAlbSubnets = alb.subnets.some(element => {
+      return alb.subnets.indexOf(element) !== alb.subnets.lastIndexOf(element);
+    });
+    if (duplicateAlbSubnets) {
+      errors.push(
+        `There are duplicates in Application Load Balancer ${alb.name} subnets in ${
+          appInfo.appName
+        }. Subnets: ${alb.subnets.join(',')}`,
+      );
+    }
+    const albSubnetsCheck = helpers.checkSubnetsInConfig(alb.subnets, vpcCheck);
+    if (albSubnetsCheck === false) {
+      errors.push(
+        `Application Load Balancer ${alb.name} does not have subnets ${alb.subnets.join(',')} in VPC ${appInfo.appVpc}`,
+      );
+    }
+
+    if (
+      albSubnetsCheck &&
+      !this.checkSubnetsTarget(alb.subnets, vpcCheck, appInfo.deploymentTargets, configs.accountsConfig, errors)
+    ) {
+      errors.push(`Application Load Balancer ${alb.name} have invalid subnets configuration`);
+    }
+    const allTargetGroupNames = appInfo.appTargetGroups?.map(tg => tg.name);
+    const albTargetGroupNames = alb.listeners?.map(tg => tg.targetGroup);
+    const compareTargetGroupNames = helpers.compareArrays(albTargetGroupNames ?? [], allTargetGroupNames ?? []);
+    if (compareTargetGroupNames.length > 0) {
+      errors.push(
+        `Application Load Balancer ${
+          alb.name
+        } has target groups that are not defined in application config. ALB target groups: ${albTargetGroupNames?.join(
+          ',',
+        )} all target groups:  ${allTargetGroupNames?.join(',')}`,
+      );
+    }
+    const listenerNameCert = (alb.listeners ?? [])
+      .filter(obj => obj.certificate)
+      .map(obj => {
+        return { name: obj.name, certificate: obj.certificate };
+      });
+    if (listenerNameCert.length > 0) {
+      this.checkListenerCerts(
+        listenerNameCert,
+        alb.name,
+        appInfo.appName,
+        configs,
+        appInfo.deploymentTargets,
+        'Application Load Balancer',
+        errors,
+      );
+    }
+  }
+
+  private checkListenerCerts(
+    listeners: { name: string; certificate: string | undefined }[],
+    albName: string,
+    appName: string,
+    configs: { networkConfig: NetworkConfig; accountsConfig: AccountsConfig; globalConfig: GlobalConfig },
+    listenerDeploymentTargets: t.DeploymentTargets,
+    loadBalancerType: string,
+    errors: string[],
+  ) {
+    // check to see if certificates are used
+    const getListenerWithCertificate = listeners.filter(obj => obj.certificate);
+
+    if (getListenerWithCertificate.length > 0 && !configs.networkConfig.certificates) {
+      errors.push(`Found listeners with certificates but no certificates specified in network-config.yaml`);
+    } else if (getListenerWithCertificate.length > 0 && configs.networkConfig.certificates) {
+      for (const listener of getListenerWithCertificate) {
+        this.verifyCertDeployment(
+          {
+            listener,
+            loadBalancerType,
+            loadBalancerName: albName,
+            deploymentTargets: listenerDeploymentTargets,
+            appName,
+          },
+          configs,
+          errors,
         );
       }
     }
   }
-  private checkAlb(
-    app: AppConfigItem,
-    vpcCheck: VpcConfig | VpcTemplatesConfig,
-    helpers: CustomizationHelperMethods,
+
+  private verifyCertDeployment(
+    listenerData: {
+      listener: { name: string; certificate: string | undefined };
+      loadBalancerType: string;
+      loadBalancerName: string;
+      deploymentTargets: t.DeploymentTargets;
+      appName: string;
+    },
+    configs: { networkConfig: NetworkConfig; accountsConfig: AccountsConfig; globalConfig: GlobalConfig },
     errors: string[],
   ) {
-    if (app.applicationLoadBalancer) {
-      if (app.applicationLoadBalancer!.securityGroups.length === 0) {
-        errors.push(
-          `Application Load Balancer ${app.applicationLoadBalancer!.name} does not have security groups in ${
-            app.name
-          }. At least one security group is required`,
-        );
-      }
-      const albSgCheck = helpers.checkSecurityGroupInConfig(app.applicationLoadBalancer!.securityGroups, vpcCheck);
-      if (albSgCheck === false) {
-        errors.push(
-          `Application Load Balancer ${app.applicationLoadBalancer!.name} does not have security groups in VPC ${
-            app.vpc
-          }.`,
-        );
-      }
-      if (app.applicationLoadBalancer!.subnets.length < 2) {
-        errors.push(
-          `Application Load Balancer ${app.applicationLoadBalancer!.name} does not have enough subnets in ${
-            app.name
-          }. At least two subnets are required in different AZs`,
-        );
-      }
-      const duplicateAlbSubnets = app.applicationLoadBalancer.subnets.some(element => {
-        return (
-          app.applicationLoadBalancer!.subnets.indexOf(element) !==
-          app.applicationLoadBalancer!.subnets.lastIndexOf(element)
-        );
-      });
-      if (duplicateAlbSubnets) {
-        errors.push(
-          `There are duplicates in Application Load Balancer ${app.applicationLoadBalancer!.name} subnets in ${
-            app.name
-          }. Subnets: ${app.applicationLoadBalancer!.subnets.join(',')}`,
-        );
-      }
-      const albSubnetsCheck = helpers.checkSubnetsInConfig(app.applicationLoadBalancer!.subnets, vpcCheck);
-      if (albSubnetsCheck === false) {
-        errors.push(
-          `Application Load Balancer ${
-            app.applicationLoadBalancer!.name
-          } does not have subnets ${app.applicationLoadBalancer!.subnets.join(',')} in VPC ${app.vpc}`,
-        );
-      }
+    // find listener cert in network cert
+    const compareCertNames = configs.networkConfig.certificates!.find(
+      obj => obj.name === listenerData.listener.certificate,
+    );
 
-      const allTargetGroupNames = app.targetGroups!.map(tg => tg.name);
-      const albTargetGroupNames = app.applicationLoadBalancer!.listeners!.map(tg => tg.targetGroup);
-      const compareTargetGroupNames = helpers.compareArrays(albTargetGroupNames ?? [], allTargetGroupNames ?? []);
-      if (compareTargetGroupNames.length > 0) {
-        errors.push(
-          `Application Load Balancer ${
-            app.applicationLoadBalancer!.name
-          } has target groups that are not defined in application config. ALB target groups: ${albTargetGroupNames.join(
-            ',',
-          )} all target groups:  ${allTargetGroupNames.join(',')}`,
+    if (!compareCertNames) {
+      errors.push(
+        `Listener: ${listenerData.listener.name} has certificate: ${listenerData.listener.certificate} but no such certificate specified in network-config.yaml`,
+      );
+    } else {
+      // check in the lookup cert where the deployment targets are and match that
+      const listenerCert = configs.networkConfig.certificates!.find(
+        obj => obj.name === listenerData.listener.certificate,
+      );
+
+      if (listenerCert?.deploymentTargets) {
+        const listenerCertEnv = CommonValidatorFunctions.getEnvironmentsFromDeploymentTarget(
+          configs.accountsConfig,
+          listenerCert.deploymentTargets,
+          configs.globalConfig,
         );
+        const listenerInputEnv = CommonValidatorFunctions.getEnvironmentsFromDeploymentTarget(
+          configs.accountsConfig,
+          listenerData.deploymentTargets,
+          configs.globalConfig,
+        );
+        const compareCertListener = CommonValidatorFunctions.compareDeploymentEnvironments(
+          listenerInputEnv,
+          listenerCertEnv,
+        );
+
+        if (!compareCertListener.match && compareCertListener.message === 'Source length exceeds target') {
+          errors.push(
+            `Listener ${listenerData.listener.name} under ${listenerData.loadBalancerType}: ${listenerData.loadBalancerName} in application ${listenerData.appName} with certificate: ${listenerData.listener.certificate} is being deployed across: ${listenerInputEnv} but certificate ${listenerCert.name} is only deployed to ${listenerCertEnv}`,
+          );
+        } else if (!compareCertListener.match && compareCertListener.message === 'Source not in target') {
+          const missingCertEnv = listenerInputEnv.filter(certEnv => !listenerCertEnv.includes(certEnv));
+          errors.push(
+            `Listener ${listenerData.listener.name} under ${listenerData.loadBalancerType}: ${listenerData.loadBalancerName} in application ${listenerData.appName} is being deployed to ${listenerInputEnv}. Network config shows certificate: ${listenerCert.name} is deployed at ${listenerCertEnv}. Certificate is missing accounts-regions: ${missingCertEnv}`,
+          );
+        }
       }
     }
+  }
+
+  /**
+   * Function to validate the service catalog config inputs.
+   * @param configDir
+   * @param values
+   * @param errors
+   */
+  private validateServiceCatalogInputs(
+    values: t.TypeOf<typeof CustomizationsConfigTypes.customizationsConfig>,
+    accountsConfig: AccountsConfig,
+    errors: string[],
+    accountNames: string[],
+    ouIdNames: string[],
+  ) {
+    const managementAccount = accountsConfig.getManagementAccount().name;
+
+    this.validateServiceCatalogShareTargetAccounts(values, accountNames, errors);
+
+    this.validateServiceCatalogShareTargetOUs(values, ouIdNames, errors, managementAccount);
+
+    // Validate portfolio names are unique
+    this.validatePortfolioNameForUniqueness(values, errors);
+  }
+
+  /**
+   * Function to validate portfolio names are unique
+   * @param values
+   */
+  private validatePortfolioNameForUniqueness(
+    values: t.TypeOf<typeof CustomizationsConfigTypes.customizationsConfig>,
+    errors: string[],
+  ) {
+    const portfolioNames = [...(values.customizations?.serviceCatalogPortfolios ?? [])].map(item => item.name);
+
+    if (new Set(portfolioNames).size !== portfolioNames.length) {
+      errors.push(`Duplicate Service Catalog Portfolio names defined [${portfolioNames}].`);
+    }
+  }
+
+  /**
+   * Function to validate existence of Service Catalog share target Accounts
+   * Make sure deployment target Accounts are part of account config file
+   * @param values
+   */
+  private validateServiceCatalogShareTargetAccounts(
+    values: t.TypeOf<typeof CustomizationsConfigTypes.customizationsConfig>,
+    accountNames: string[],
+    errors: string[],
+  ) {
+    for (const portfolio of values.customizations?.serviceCatalogPortfolios ?? []) {
+      for (const account of portfolio?.shareTargets?.accounts ?? []) {
+        if (accountNames.indexOf(account) === -1) {
+          errors.push(
+            `Share target account ${account} for Service Catalog portfolio ${portfolio.name} does not exist in accounts-config.yaml file.`,
+          );
+        }
+      }
+    }
+  }
+
+  /**
+   * Function to validate existence of Service Catalog share target OUs
+   * Make sure deployment target OUs are part of Organization config file
+   * @param values
+   */
+  private validateServiceCatalogShareTargetOUs(
+    values: t.TypeOf<typeof CustomizationsConfigTypes.customizationsConfig>,
+    ouIdNames: string[],
+    errors: string[],
+    managementAccount: string,
+  ) {
+    for (const portfolio of values.customizations?.serviceCatalogPortfolios ?? []) {
+      for (const ou of portfolio?.shareTargets?.organizationalUnits ?? []) {
+        if (portfolio.account !== managementAccount) {
+          errors.push(
+            `Error sharing Service Catalog portfolio ${portfolio.name} with Organizational Unit ${ou}. Sharing portfolios to Organizational Units is only supported in the Management account.`,
+          );
+        }
+        if (ouIdNames.indexOf(ou) === -1) {
+          errors.push(
+            `Share target OU ${ou} for Service Catalog portfolio ${portfolio.name} does not exist in accounts-config.yaml file.`,
+          );
+        }
+      }
+    }
+  }
+
+  /**
+   * Function to validate if subnet is available by local or shared target in deployment target.
+   */
+  private checkSubnetsTarget(
+    subnets: string[],
+    vpcCheck: VpcConfig | VpcTemplatesConfig,
+    deploymentTargets: t.DeploymentTargets,
+    accountsConfig: AccountsConfig,
+    errors: string[],
+  ) {
+    let isValid = true;
+    const subnetsInConfig: SubnetConfig[] = subnets.map(
+      (subnet: string) => vpcCheck.subnets!.find(item => item.name === subnet)!,
+    );
+    for (const subnet of subnetsInConfig) {
+      const subnetTargets = new Set([
+        ...CommonValidatorFunctions.getAccountNamesFromTargets(
+          accountsConfig,
+          (subnet.shareTargets ?? {}) as t.ShareTargets,
+        ),
+        ...('deploymentTargets' in vpcCheck
+          ? CommonValidatorFunctions.getAccountNamesFromTargets(accountsConfig, vpcCheck.deploymentTargets)
+          : [vpcCheck.account]),
+      ]);
+      const deploymentTargetAccounts = CommonValidatorFunctions.getAccountNamesFromTargets(
+        accountsConfig,
+        deploymentTargets,
+      );
+
+      for (const targetItem of deploymentTargetAccounts) {
+        if (!subnetTargets.has(targetItem)) {
+          isValid = false;
+          errors.push(
+            `Subnet ${subnet.name} defined in launchTemplate or autoScalingGroup is not created or shared in account ${targetItem}`,
+          );
+        }
+      }
+    }
+    return isValid;
   }
 }
 
 class CustomizationHelperMethods {
+  private accountsConfig: AccountsConfig;
+  private iamConfig: IamConfig;
+  private globalConfig: GlobalConfig;
+
+  constructor(accountsConfig: AccountsConfig, iamConfig: IamConfig, globalConfig: GlobalConfig) {
+    this.accountsConfig = accountsConfig;
+    this.iamConfig = iamConfig;
+    this.globalConfig = globalConfig;
+  }
+  /**
+   * Get regions of deploymentTargets
+   */
+  public getRegionsFromDeploymentTarget(deploymentTargets: t.DeploymentTargets): string[] {
+    if (deploymentTargets.excludedRegions) {
+      return this.globalConfig.enabledRegions.filter(obj => !deploymentTargets.excludedRegions.includes(obj));
+    } else {
+      return this.globalConfig.enabledRegions;
+    }
+  }
   /**
    * Validate if VPC name is in config file
    * @param string
@@ -621,24 +1003,102 @@ class CustomizationHelperMethods {
       }
     }
   }
+
+  public getIamUsersDeployedToAccount(accountName: string) {
+    const usernameList = [];
+    for (const userSetItem of this.iamConfig.userSets ?? []) {
+      const deploymentAccountNames = this.getAccountNamesFromDeploymentTarget(userSetItem.deploymentTargets);
+      if (deploymentAccountNames.includes(accountName)) {
+        usernameList.push(...userSetItem.users.map(a => a.username));
+      }
+    }
+    return usernameList;
+  }
+
+  public getIamGroupsDeployedToAccount(accountName: string) {
+    const groupList = [];
+    for (const groupSetItem of this.iamConfig.groupSets ?? []) {
+      const deploymentAccountNames = this.getAccountNamesFromDeploymentTarget(groupSetItem.deploymentTargets);
+      if (deploymentAccountNames.includes(accountName)) {
+        groupList.push(...groupSetItem.groups.map(a => a.name));
+      }
+    }
+    return groupList;
+  }
+
+  public getIamRolesDeployedToAccount(accountName: string) {
+    const roleList = [];
+    for (const roleSetItem of this.iamConfig.roleSets ?? []) {
+      const deploymentAccountNames = this.getAccountNamesFromDeploymentTarget(roleSetItem.deploymentTargets);
+      if (deploymentAccountNames.includes(accountName)) {
+        roleList.push(...roleSetItem.roles.map(a => a.name));
+      }
+    }
+    return roleList;
+  }
+
+  public getAccountNamesFromDeploymentTarget(deploymentTargets: t.DeploymentTargets): string[] {
+    const accountNames: string[] = [];
+    // Helper function to add an account to the list
+    const addAccountName = (accountName: string) => {
+      if (!accountNames.includes(accountName)) {
+        accountNames.push(accountName);
+      }
+    };
+    /**
+     * @param configDir
+     * @returns
+     */
+
+    for (const ou of deploymentTargets.organizationalUnits ?? []) {
+      if (ou === 'Root') {
+        for (const account of [...this.accountsConfig.mandatoryAccounts, ...this.accountsConfig.workloadAccounts]) {
+          addAccountName(account.name);
+        }
+      } else {
+        for (const account of [...this.accountsConfig.mandatoryAccounts, ...this.accountsConfig.workloadAccounts]) {
+          if (ou === account.organizationalUnit) {
+            addAccountName(account.name);
+          }
+        }
+      }
+    }
+
+    for (const account of deploymentTargets.accounts ?? []) {
+      addAccountName(account);
+    }
+
+    return accountNames;
+  }
 }
 
 class FirewallValidator {
-  constructor(values: CustomizationsConfig, configDir: string, errors: string[]) {
+  constructor(
+    values: CustomizationsConfig,
+    networkConfig: NetworkConfig,
+    securityConfig: SecurityConfig,
+    accountsConfig: AccountsConfig,
+    configDir: string,
+    helpers: CustomizationHelperMethods,
+    errors: string[],
+  ) {
     // Validate firewall instances
-    this.validateFirewalls(values, configDir, errors);
+    this.validateFirewalls(values, networkConfig, securityConfig, accountsConfig, configDir, helpers, errors);
   }
 
-  private validateFirewalls(values: CustomizationsConfig, configDir: string, errors: string[]) {
-    // Load configs and helper methods
-    const networkConfig = NetworkConfig.load(configDir);
-    const securityConfig = SecurityConfig.load(configDir);
-    const helpers = new CustomizationHelperMethods();
-
+  private validateFirewalls(
+    values: CustomizationsConfig,
+    networkConfig: NetworkConfig,
+    securityConfig: SecurityConfig,
+    accountsConfig: AccountsConfig,
+    configDir: string,
+    helpers: CustomizationHelperMethods,
+    errors: string[],
+  ) {
     // Validate firewall instance configs
-    this.validateFirewallInstances(values, helpers, configDir, networkConfig, securityConfig, errors);
+    this.validateFirewallInstances(values, helpers, configDir, networkConfig, securityConfig, accountsConfig, errors);
     // Validate firewall ASG configs
-    this.validateFirewallAsgs(values, helpers, configDir, networkConfig, securityConfig, errors);
+    this.validateFirewallAsgs(values, helpers, configDir, networkConfig, securityConfig, accountsConfig, errors);
     // Validate firewall target groups
     this.validateFirewallTargetGroups(values, helpers, errors);
   }
@@ -658,6 +1118,7 @@ class FirewallValidator {
     configDir: string,
     networkConfig: NetworkConfig,
     securityConfig: SecurityConfig,
+    accountsConfig: AccountsConfig,
     errors: string[],
   ) {
     const firewallInstances = [...(values.firewalls?.instances ?? []), ...(values.firewalls?.managerInstances ?? [])];
@@ -678,10 +1139,33 @@ class FirewallValidator {
         );
       }
 
+      if (firewall.configDir && firewall.configFile) {
+        errors.push(
+          `[Firewall instance ${firewall.name}]: Either configDir or configFile property should be provided but not both in configuration`,
+        );
+      }
+
       // Validate launch template
       if (NetworkConfigTypes.vpcConfig.is(vpc) && firewall.launchTemplate.networkInterfaces) {
-        this.validateLaunchTemplate(vpc, firewall, configDir, securityConfig, helpers, errors);
+        this.validateLaunchTemplate(vpc, firewall, configDir, securityConfig, accountsConfig, helpers, errors);
+        this.validateReplacementConfig(firewall, errors);
       }
+    }
+  }
+
+  /**
+   * Checks if the object structure is correct when static replacements are defined
+   * @param firewall Ec2FirewallInstanceConfig | Ec2FirewallAutoScalingGroupConfig
+   * @param errors string[]
+   */
+  private validateReplacementConfig(
+    firewall: Ec2FirewallInstanceConfig | Ec2FirewallAutoScalingGroupConfig,
+    errors: string[],
+  ) {
+    if (firewall.staticReplacements && !(firewall.configFile || firewall.configDir)) {
+      errors.push(
+        `[Firewall ${firewall.name}]: configFile or configDir property must be set when defining static firewall replacements configuration`,
+      );
     }
   }
 
@@ -691,6 +1175,7 @@ class FirewallValidator {
     configDir: string,
     networkConfig: NetworkConfig,
     securityConfig: SecurityConfig,
+    accountsConfig: AccountsConfig,
     errors: string[],
   ) {
     for (const group of values.firewalls?.autoscalingGroups ?? []) {
@@ -717,9 +1202,16 @@ class FirewallValidator {
         }
       }
 
+      if (group.configDir && group.configFile) {
+        errors.push(
+          `[ASG ${group.name}]: Either configDir or configFile property should be provided but not both for ASG`,
+        );
+      }
+
       // Validate launch template
       if (NetworkConfigTypes.vpcConfig.is(vpc)) {
-        this.validateLaunchTemplate(vpc, group, configDir, securityConfig, helpers, errors);
+        this.validateLaunchTemplate(vpc, group, configDir, securityConfig, accountsConfig, helpers, errors);
+        this.validateReplacementConfig(group, errors);
         this.validateAsgTargetGroups(values, group, errors);
       }
     }
@@ -803,13 +1295,16 @@ class FirewallValidator {
       | t.TypeOf<typeof CustomizationsConfigTypes.ec2FirewallAutoScalingGroupConfig>,
     configDir: string,
     securityConfig: SecurityConfig,
+    accountsConfig: AccountsConfig,
     helpers: CustomizationHelperMethods,
     errors: string[],
   ) {
     // Validate security groups
     this.validateLaunchTemplateSecurityGroups(vpc, firewall, helpers, errors);
     // Validate subnets
-    this.validateLaunchTemplateSubnets(vpc, firewall, helpers, errors);
+    this.validateLaunchTemplateSubnets(vpc, firewall, helpers, accountsConfig, errors);
+    // Validate IAM instance profile
+    this.validateIamInstanceProfile(vpc, firewall, helpers, errors);
     // Validate block devices
     if (firewall.launchTemplate.blockDeviceMappings) {
       helpers.checkBlockDeviceMappings(
@@ -844,7 +1339,8 @@ class FirewallValidator {
     errors: string[],
   ) {
     const interfaces = firewall.launchTemplate.networkInterfaces;
-    if (firewall.launchTemplate.securityGroups.length === 0) {
+    const firewallLaunchTemplateSecurityGroups = firewall.launchTemplate.securityGroups ?? [];
+    if (firewallLaunchTemplateSecurityGroups.length === 0) {
       // Validate network interfaces are configured
       if (!interfaces) {
         errors.push(
@@ -860,7 +1356,7 @@ class FirewallValidator {
     }
 
     // Validate security groups
-    if (!helpers.checkSecurityGroupInConfig(firewall.launchTemplate.securityGroups, vpc)) {
+    if (!helpers.checkSecurityGroupInConfig(firewallLaunchTemplateSecurityGroups, vpc)) {
       errors.push(
         `[Firewall ${firewall.name}]: launch template references security groups that do not exist in VPC ${vpc.name}`,
       );
@@ -906,10 +1402,11 @@ class FirewallValidator {
       | t.TypeOf<typeof CustomizationsConfigTypes.ec2FirewallInstanceConfig>
       | t.TypeOf<typeof CustomizationsConfigTypes.ec2FirewallAutoScalingGroupConfig>,
     helpers: CustomizationHelperMethods,
+    accountsConfig: AccountsConfig,
     errors: string[],
   ) {
     if (CustomizationsConfigTypes.ec2FirewallInstanceConfig.is(firewall)) {
-      this.validateInstanceLaunchTemplateSubnets(vpc, firewall, helpers, errors);
+      this.validateInstanceLaunchTemplateSubnets(vpc, firewall, helpers, accountsConfig, errors);
     }
     if (CustomizationsConfigTypes.ec2FirewallAutoScalingGroupConfig.is(firewall)) {
       this.validateAsgLaunchTemplateSubnets(vpc, firewall, helpers, errors);
@@ -927,6 +1424,7 @@ class FirewallValidator {
     vpc: VpcConfig,
     firewall: t.TypeOf<typeof CustomizationsConfigTypes.ec2FirewallInstanceConfig>,
     helpers: CustomizationHelperMethods,
+    accountsConfig: AccountsConfig,
     errors: string[],
   ) {
     // Validate a subnet is associated with each network interface
@@ -939,6 +1437,8 @@ class FirewallValidator {
     const interfaceSubnets = firewall.launchTemplate.networkInterfaces!.map(interfaceItem => {
       return interfaceItem.subnetId!;
     });
+    // Subnet configs
+    const subnets: t.TypeOf<typeof NetworkConfigTypes.subnetConfig>[] = [];
     const subnetsExist = helpers.checkSubnetsInConfig(interfaceSubnets, vpc);
     if (!subnetsExist) {
       errors.push(
@@ -948,7 +1448,6 @@ class FirewallValidator {
     // Validate subnet AZs
     if (subnetsExist) {
       // Retrieve subnet configs
-      const subnets: t.TypeOf<typeof NetworkConfigTypes.subnetConfig>[] = [];
       interfaceSubnets.forEach(subnet => subnets.push(vpc.subnets!.find(item => item.name === subnet)!));
 
       // Map AZs
@@ -962,6 +1461,24 @@ class FirewallValidator {
         );
       }
     }
+    const isFirewallLocal = !firewall.account || vpc.account === firewall.account;
+    if (isFirewallLocal) {
+      // No more validations to perform
+      return;
+    }
+    const invalidInterfaceSubnets: string[] = [];
+    subnets.map(
+      subnet =>
+        !CommonValidatorFunctions.getAccountNamesFromTargets(
+          accountsConfig,
+          (subnet.shareTargets ?? {}) as t.ShareTargets,
+        ).includes(firewall.account!) && invalidInterfaceSubnets.push(subnet.name),
+    );
+    invalidInterfaceSubnets.forEach(subnetName =>
+      errors.push(
+        `[Firewall instance ${firewall.name}]: launch template network interface references Subnet ${subnetName} does not share to Account ${firewall.account}`,
+      ),
+    );
   }
 
   /**
@@ -1011,6 +1528,43 @@ class FirewallValidator {
       }
     }
     return true;
+  }
+
+  /**
+   * Validate firewall IAM instance profile
+   * @param vpc
+   * @param firewall
+   * @param helpers
+   * @param errors
+   */
+  private validateIamInstanceProfile(
+    vpc: VpcConfig,
+    firewall:
+      | t.TypeOf<typeof CustomizationsConfigTypes.ec2FirewallInstanceConfig>
+      | t.TypeOf<typeof CustomizationsConfigTypes.ec2FirewallAutoScalingGroupConfig>,
+    helpers: CustomizationHelperMethods,
+    errors: string[],
+  ) {
+    //
+    // Validate IAM instance profile exists if configFile, configDir or licenseFile are defined
+    if (
+      (firewall.configFile || firewall.licenseFile || firewall.configDir) &&
+      !firewall.launchTemplate.iamInstanceProfile
+    ) {
+      errors.push(
+        `[Firewall ${firewall.name}]: IAM instance profile must be defined in the launch template when either configFile, licenseFile or configDir properties are defined`,
+      );
+    }
+    //
+    // Validate IAM instance profile is deployed to the account
+    if (firewall.launchTemplate.iamInstanceProfile) {
+      const accountIamRoles = helpers.getIamRolesDeployedToAccount(vpc.account);
+      if (!accountIamRoles.includes(firewall.launchTemplate.iamInstanceProfile)) {
+        errors.push(
+          `[Firewall ${firewall.name}]: IAM instance profile is not deployed to the firewall VPC target account. Target VPC account: ${vpc.account}`,
+        );
+      }
+    }
   }
 
   private validateAsgTargetGroups(

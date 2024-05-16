@@ -30,9 +30,9 @@ export interface ServiceQuotaDefinitionProps {
    */
   readonly desiredValue: number;
   /**
-   * Custom resource lambda log group encryption key
+   * Custom resource lambda log group encryption key, when undefined default AWS managed key will be used
    */
-  readonly kmsKey: cdk.aws_kms.Key;
+  readonly kmsKey?: cdk.aws_kms.IKey;
   /**
    * Custom resource lambda log retention in days
    */
@@ -51,7 +51,7 @@ export class LimitsDefinition extends Construct {
     //
     const provider = cdk.CustomResourceProvider.getOrCreateProvider(this, DEFAULT_LIMITS, {
       codeDirectory: path.join(__dirname, 'create-limits/dist'),
-      runtime: cdk.CustomResourceProviderRuntime.NODEJS_14_X,
+      runtime: cdk.CustomResourceProviderRuntime.NODEJS_16_X,
       policyStatements: [
         {
           Sid: 'OrganizationListActions',

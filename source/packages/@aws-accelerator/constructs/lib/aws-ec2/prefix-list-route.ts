@@ -22,9 +22,9 @@ export interface PrefixListRouteProps {
   readonly destinationPrefixListId: string;
 
   /**
-   * Custom resource lambda log group encryption key
+   * Custom resource lambda log group encryption key, when undefined default AWS managed key will be used
    */
-  readonly logGroupKmsKey: cdk.aws_kms.Key;
+  readonly logGroupKmsKey?: cdk.aws_kms.IKey;
 
   /**
    * Custom resource lambda log retention in days
@@ -95,7 +95,7 @@ export class PrefixListRoute extends cdk.Resource {
 
     const provider = cdk.CustomResourceProvider.getOrCreateProvider(this, 'Custom::PrefixListRoute', {
       codeDirectory: path.join(__dirname, 'prefix-list-route/dist'),
-      runtime: cdk.CustomResourceProviderRuntime.NODEJS_14_X,
+      runtime: cdk.CustomResourceProviderRuntime.NODEJS_16_X,
       policyStatements: [
         {
           Sid: 'AllowModifyRoutes',

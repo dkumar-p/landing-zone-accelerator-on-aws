@@ -25,9 +25,9 @@ export interface CreateOrganizationAccountsProps {
   readonly govCloudAccountMappingTable: cdk.aws_dynamodb.ITable | undefined;
   readonly accountRoleName: string;
   /**
-   * Custom resource lambda log group encryption key
+   * Custom resource lambda log group encryption key, when undefined default AWS managed key will be used
    */
-  readonly kmsKey: cdk.aws_kms.Key;
+  readonly kmsKey?: cdk.aws_kms.IKey;
   /**
    * Custom resource lambda log retention in days
    */
@@ -47,7 +47,7 @@ export class CreateOrganizationAccounts extends Construct {
 
     this.onEvent = new cdk.aws_lambda.Function(this, 'CreateOrganizationAccounts', {
       code: cdk.aws_lambda.Code.fromAsset(path.join(__dirname, 'create-accounts/dist')),
-      runtime: cdk.aws_lambda.Runtime.NODEJS_14_X,
+      runtime: cdk.aws_lambda.Runtime.NODEJS_16_X,
       handler: 'index.handler',
       timeout: cdk.Duration.seconds(30),
       description: 'Create Organization Accounts OnEvent handler',
@@ -87,7 +87,7 @@ export class CreateOrganizationAccounts extends Construct {
 
     this.isComplete = new cdk.aws_lambda.Function(this, 'CreateOrganizationAccountStatus', {
       code: cdk.aws_lambda.Code.fromAsset(path.join(__dirname, 'create-accounts-status/dist')),
-      runtime: cdk.aws_lambda.Runtime.NODEJS_14_X,
+      runtime: cdk.aws_lambda.Runtime.NODEJS_16_X,
       handler: 'index.handler',
       timeout: cdk.Duration.minutes(5),
       description: 'Create Organization Account isComplete handler',

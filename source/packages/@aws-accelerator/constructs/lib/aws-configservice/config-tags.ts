@@ -23,9 +23,9 @@ export interface ConfigServiceTagsProps {
   readonly resourceArn: string;
   readonly tags: Tag[];
   /**
-   * Custom resource lambda log group encryption key
+   * Custom resource lambda log group encryption key, when undefined default AWS managed key will be used
    */
-  readonly kmsKey: cdk.aws_kms.IKey;
+  readonly kmsKey?: cdk.aws_kms.IKey;
   /**
    * Custom resource lambda log retention in days
    */
@@ -48,7 +48,7 @@ export class ConfigServiceTags extends Construct {
     //
     const provider = cdk.CustomResourceProvider.getOrCreateProvider(this, CONFIGSERVICE_TAGS, {
       codeDirectory: path.join(__dirname, 'update-tags/dist'),
-      runtime: cdk.CustomResourceProviderRuntime.NODEJS_14_X,
+      runtime: cdk.CustomResourceProviderRuntime.NODEJS_16_X,
       policyStatements: [
         {
           Effect: 'Allow',
