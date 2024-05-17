@@ -1592,7 +1592,7 @@ export class IamConfig implements t.TypeOf<typeof IamConfigTypes.iamConfig> {
    */
   readonly providers: SamlProviderConfig[] = [];
 
-   /**
+  /**
    * Policy set configuration.
    *
    * To configure IAM policy named Default-Boundary-Policy with permission boundary defined in iam-policies/boundary-policy.json file, you need to provide following values for this parameter.
@@ -1608,9 +1608,11 @@ export class IamConfig implements t.TypeOf<typeof IamConfigTypes.iamConfig> {
    *        - name: Default-Boundary-Policy
    *          policy: iam-policies/boundary-policy.json
    *```
+   *
    * @see {@link IamConfig} / {@link PolicySetConfig}
-  readonly policySets: PolicySetConfig[] = [];
    */
+  readonly policySets: PolicySetConfig[] = [];
+  
 
   /**
    * Role sets configuration
